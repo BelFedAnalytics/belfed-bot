@@ -49,7 +49,7 @@ COMMUNITY_EN_ID      = int(_en_id) if _en_id else None
 WEB_URL_RU           = os.environ.get("BELFED_WEB_URL",    "https://belfed.ru").rstrip("/")
 WEB_URL_EN           = os.environ.get("BELFED_WEB_URL_EN", "https://belfed.com").rstrip("/")
 PRICE_RUB            = os.environ.get("PRICE_MONTHLY_RUB", "1500")
-PRICE_USD            = os.environ.get("PRICE_MONTHLY_USD", "19")
+PRICE_USD            = os.environ.get("PRICE_MONTHLY_USD", "15")
 BOT_SHARED_SECRET    = os.environ.get("BOT_SHARED_SECRET", "")
 BOT_CLAIM_TRIAL_URL  = os.environ.get(
     "BOT_CLAIM_TRIAL_URL",
@@ -62,8 +62,8 @@ YOOKASSA_CREATE_URL  = os.environ.get(
 PREVIEW_CHANNEL_URL  = os.environ.get("TELEGRAM_PREVIEW_CHANNEL_URL", "").strip()
 
 # Telegram Stars (EN only) ----------------------------------------------
-# 1000 Stars ≈ $15.69 buyer pays / ~$13 creator earns. Period must be 2592000 (30d).
-STARS_PRICE          = int(os.environ.get("STARS_PRICE_MONTHLY", "1000"))
+# 956 Stars ≈ $15 buyer pays / ~$12.43 creator earns at $0.01569/Star. Period must be 2592000 (30d).
+STARS_PRICE          = int(os.environ.get("STARS_PRICE_MONTHLY", "956"))
 STARS_PERIOD_SECONDS = 2592000  # 30 days — the only allowed value for Stars subscriptions
 TELEGRAM_API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -368,16 +368,17 @@ TEXTS_RU = {
     "pay_no_profile":  "Сначала активируйте бесплатный доступ — /start",
     "btn_open_pay":    "💳 Открыть страницу оплаты",
     # Telegram Stars (RU-юзеры пока не используют, но переводы оставлены на будущее)
-    "btn_pay_stars":   f"⭐ Оформить — {STARS_PRICE} Stars / мес",
-    "stars_creating":  "⏳ Готовлю счёт в Stars…",
+    "btn_pay_stars":   f"💳 Оформить — ${PRICE_USD} / мес",
+    "stars_creating":  "⏳ Готовлю счёт…",
     "stars_pay_link": (
-        f"⭐ Подписка BelFed Premium — {STARS_PRICE} Stars / мес\n\n"
-        "Нажмите кнопку ниже, чтобы оплатить через Telegram Stars. "
-        "Подписка автоматически продлевается каждые 30 дней. "
-        "Вы можете отменить её в любой момент в Настройках Telegram.\n\n"
+        f"💳 BelFed Premium — ${PRICE_USD} / мес\n\n"
+        "Нажмите кнопку ниже, чтобы оформить подписку. Оплата проходит "
+        "через Telegram, без карты и дополнительной регистрации. "
+        "Подписка автоматически продлевается каждые 30 дней — отменить "
+        "можно в любой момент в настройках Telegram.\n\n"
         "После оплаты я пришлю персональную ссылку в закрытый канал."
     ),
-    "btn_open_stars_pay": "⭐ Оплатить через Stars",
+    "btn_open_stars_pay": f"💳 Оформить — ${PRICE_USD} / мес",
     "stars_payment_received": (
         "✅ Оплата получена! Спасибо.\n\n"
         "Подписка активна до: {until}\n"
@@ -480,16 +481,17 @@ TEXTS_EN = {
     "pay_no_profile":  "Activate the free trial first — /start",
     "btn_open_pay":    "💳 Open payment page",
     # Telegram Stars (EN users)
-    "btn_pay_stars":   f"⭐ Subscribe — {STARS_PRICE} Stars / mo",
-    "stars_creating":  "⏳ Preparing your Stars invoice…",
+    "btn_pay_stars":   f"💳 Subscribe — ${PRICE_USD} / mo",
+    "stars_creating":  "⏳ Preparing your invoice…",
     "stars_pay_link": (
-        f"⭐ BelFed Premium subscription — {STARS_PRICE} Stars / month\n\n"
-        "Tap the button below to pay with Telegram Stars. "
-        "The subscription auto-renews every 30 days. "
-        "You can cancel it anytime in Telegram Settings.\n\n"
+        f"💳 BelFed Premium — ${PRICE_USD} / month\n\n"
+        "Tap the button below to subscribe. Payment is processed securely "
+        "through Telegram — no card or extra registration required. "
+        "The subscription auto-renews every 30 days and can be cancelled "
+        "anytime in your Telegram settings.\n\n"
         "After payment I'll send your personal invite to the private channel."
     ),
-    "btn_open_stars_pay": "⭐ Pay with Stars",
+    "btn_open_stars_pay": f"💳 Subscribe — ${PRICE_USD} / mo",
     "stars_payment_received": (
         "✅ Payment received. Thank you!\n\n"
         "Subscription active until: {until}\n"
