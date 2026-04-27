@@ -34,7 +34,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
-    ContextTypes, filters,
+    PreCheckoutQueryHandler, ContextTypes, filters,
 )
 
 # ---------- Config ---------------------------------------------------------
@@ -60,6 +60,12 @@ YOOKASSA_CREATE_URL  = os.environ.get(
     f"{SUPABASE_URL}/functions/v1/yookassa-create-payment",
 )
 PREVIEW_CHANNEL_URL  = os.environ.get("TELEGRAM_PREVIEW_CHANNEL_URL", "").strip()
+
+# Telegram Stars (EN only) ----------------------------------------------
+# 1000 Stars ≈ $15.69 buyer pays / ~$13 creator earns. Period must be 2592000 (30d).
+STARS_PRICE          = int(os.environ.get("STARS_PRICE_MONTHLY", "1000"))
+STARS_PERIOD_SECONDS = 2592000  # 30 days — the only allowed value for Stars subscriptions
+TELEGRAM_API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -143,6 +149,62 @@ async def claim_trial_via_edge(telegram_id: int, username: str | None,
     except Exception as e:
         log.error("claim_trial_via_edge failed [lang=%s]: %s", lang, e)
         return None
+
+async def create_stars_invoice_link(profile_id: str, telegram_id: int, lang: str) -> str | None:
+    """Создаёт invoice link для оплаты через Telegram Stars (recurring subscription).
+    Bot API: createInvoiceLink. currency=XTR + subscription_period=2592000 → включает auto-renew.
+    payload идёт обратно в SuccessfulPayment — по нему понимаем, кому выдавать доступ."""
+    payload = f"stars_sub|{profile_id}|{telegram_id}"
+    body = {
+        "title":       "BelFed Premium",
+        "description": ("Monthly subscription to BelFed | Community: trade ideas, market "
+                        "reviews and analytics from leading investment houses. Cancel anytime."),
+        "payload":     payload,
+        "currency":    "XTR",
+        "prices":      [{"label": "BelFed Premium (1 month)", "amount": STARS_PRICE}],
+        "subscription_period": STARS_PERIOD_SECONDS,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(f"{TELEGRAM_API_BASE}/createInvoiceLink", json=body)
+            data = r.json()
+            if not data.get("ok"):
+                log.error("createInvoiceLink failed: %s", data)
+                return None
+            return data.get("result")
+    except Exception as e:
+        log.error("create_stars_invoice_link failed: %s", e)
+        return None
+
+async def apply_stars_payment_via_rpc(
+    telegram_charge_id: str,
+    user_id: str,
+    amount_stars: int,
+    subscription_expiration_date: int | None,
+    paid_at: datetime,
+    raw_event: dict,
+    is_recurring: bool,
+) -> bool:
+    """Вызывает RPC apply_stars_payment — обновляет profiles + subscriptions + payments."""
+    exp_iso = None
+    if subscription_expiration_date:
+        exp_iso = datetime.fromtimestamp(subscription_expiration_date, tz=timezone.utc).isoformat()
+    status, _ = await sb_post(
+        "/rest/v1/rpc/apply_stars_payment",
+        {
+            "p_telegram_charge_id":           telegram_charge_id,
+            "p_user_id":                      user_id,
+            "p_amount_stars":                 amount_stars,
+            "p_subscription_expiration_date": exp_iso,
+            "p_paid_at":                      paid_at.isoformat(),
+            "p_raw":                          raw_event,
+            "p_is_recurring":                 is_recurring,
+        },
+    )
+    if status not in (200, 204):
+        log.error("apply_stars_payment RPC failed: %s", status)
+        return False
+    return True
 
 async def create_payment_via_edge(user_id: str, email: str, return_url: str) -> dict | None:
     """Бот создаёт платёж через yookassa-create-payment (x-bot-secret авторизация).
@@ -305,6 +367,29 @@ TEXTS_RU = {
     "pay_error":       "⚠️ Не удалось создать платёж. Попробуйте через минуту.",
     "pay_no_profile":  "Сначала активируйте бесплатный доступ — /start",
     "btn_open_pay":    "💳 Открыть страницу оплаты",
+    # Telegram Stars (RU-юзеры пока не используют, но переводы оставлены на будущее)
+    "btn_pay_stars":   f"⭐ Оформить — {STARS_PRICE} Stars / мес",
+    "stars_creating":  "⏳ Готовлю счёт в Stars…",
+    "stars_pay_link": (
+        f"⭐ Подписка BelFed Premium — {STARS_PRICE} Stars / мес\n\n"
+        "Нажмите кнопку ниже, чтобы оплатить через Telegram Stars. "
+        "Подписка автоматически продлевается каждые 30 дней. "
+        "Вы можете отменить её в любой момент в Настройках Telegram.\n\n"
+        "После оплаты я пришлю персональную ссылку в закрытый канал."
+    ),
+    "btn_open_stars_pay": "⭐ Оплатить через Stars",
+    "stars_payment_received": (
+        "✅ Оплата получена! Спасибо.\n\n"
+        "Подписка активна до: {until}\n"
+        "Автопродление: включено\n\n"
+        "Ваша персональная ссылка в закрытый канал "
+        "(одноразовая, действует 1 час):\n{invite}"
+    ),
+    "stars_payment_no_invite": (
+        "✅ Оплата получена! Подписка активна до: {until}\n\n"
+        "Не удалось автоматически создать ссылку в канал. "
+        "Нажмите «📺 Закрытый канал» в меню — я выдам её."
+    ),
 }
 
 TEXTS_EN = {
@@ -394,6 +479,29 @@ TEXTS_EN = {
     "pay_error":       "⚠️ Couldn't create payment. Please try again in a minute.",
     "pay_no_profile":  "Activate the free trial first — /start",
     "btn_open_pay":    "💳 Open payment page",
+    # Telegram Stars (EN users)
+    "btn_pay_stars":   f"⭐ Subscribe — {STARS_PRICE} Stars / mo",
+    "stars_creating":  "⏳ Preparing your Stars invoice…",
+    "stars_pay_link": (
+        f"⭐ BelFed Premium subscription — {STARS_PRICE} Stars / month\n\n"
+        "Tap the button below to pay with Telegram Stars. "
+        "The subscription auto-renews every 30 days. "
+        "You can cancel it anytime in Telegram Settings.\n\n"
+        "After payment I'll send your personal invite to the private channel."
+    ),
+    "btn_open_stars_pay": "⭐ Pay with Stars",
+    "stars_payment_received": (
+        "✅ Payment received. Thank you!\n\n"
+        "Subscription active until: {until}\n"
+        "Auto-renew: on\n\n"
+        "Your personal invite to the private channel "
+        "(single-use, valid 1 hour):\n{invite}"
+    ),
+    "stars_payment_no_invite": (
+        "✅ Payment received. Subscription active until: {until}\n\n"
+        "Couldn't create the channel invite automatically. "
+        "Tap “📺 Private channel” in the menu — I'll send it."
+    ),
 }
 
 def T(lang: str, key: str) -> str:
@@ -615,8 +723,13 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
     has_active_paid = sub and sub.get("status") == "active"
     if not has_active_paid and not is_admin(profile):
         if profile:
-            # Бот сам создаёт платёж — Telegram-only flow
-            rows.append([InlineKeyboardButton(T(lang, "btn_pay"), callback_data="start_payment")])
+            # EN-юзеры платят через Telegram Stars; RU — через YooKassa
+            if lang == "en":
+                rows.append([InlineKeyboardButton(T(lang, "btn_pay_stars"),
+                                                   callback_data="start_payment_stars")])
+            else:
+                rows.append([InlineKeyboardButton(T(lang, "btn_pay"),
+                                                   callback_data="start_payment")])
         else:
             # Нет профиля — fallback на сайт (редкий случай, юзер открыл бота без deep-link)
             rows.append([InlineKeyboardButton(T(lang, "btn_pay"), url=f"{web_url}/members.html#subscribe")])
@@ -816,6 +929,134 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_payment_with_email(query.message, context, profile, lang)
         return
 
+    if data == "start_payment_stars":
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        if not profile:
+            await query.message.reply_text(T(lang, "pay_no_profile"))
+            return
+        await query.message.reply_text(T(lang, "stars_creating"))
+        invoice_url = await create_stars_invoice_link(profile["id"], user.id, lang)
+        if not invoice_url:
+            await query.message.reply_text(T(lang, "pay_error"))
+            return
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            T(lang, "btn_open_stars_pay"), url=invoice_url
+        )]])
+        await query.message.reply_text(
+            T(lang, "stars_pay_link"),
+            reply_markup=kb,
+            disable_web_page_preview=True,
+        )
+        return
+
+# ---------- Telegram Stars: pre_checkout + successful_payment ------------
+async def on_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Telegram требует ответить в течение 10 секунд, иначе платёж отменяется.
+    Для Stars обычно просто auto-approve."""
+    pcq = update.pre_checkout_query
+    try:
+        # Минимальная проверка: правильная валюта и payload
+        if pcq.currency != "XTR" or not (pcq.invoice_payload or "").startswith("stars_sub|"):
+            await pcq.answer(ok=False, error_message="Invalid invoice")
+            return
+        await pcq.answer(ok=True)
+    except Exception as e:
+        log.error("on_pre_checkout failed: %s", e)
+        try:
+            await pcq.answer(ok=False, error_message="Internal error")
+        except Exception:
+            pass
+
+async def on_successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """После успешной оплаты: записываем в БД, выдаём invite в EN-group."""
+    msg = update.message
+    sp = msg.successful_payment
+    user = update.effective_user
+
+    payload = sp.invoice_payload or ""
+    parts = payload.split("|")
+    # payload format: stars_sub|<profile_id>|<telegram_id>
+    if len(parts) < 3 or parts[0] != "stars_sub":
+        log.warning("successful_payment with unexpected payload: %s", payload)
+        return
+    profile_id_from_payload = parts[1]
+
+    # Для recurring подписок Telegram присылает subscription_expiration_date (Unix timestamp)
+    sub_exp = getattr(sp, "subscription_expiration_date", None)
+    is_recurring_flag = getattr(sp, "is_recurring", False) or sub_exp is not None
+
+    # Сырой event — в jsonb для аудита
+    raw = {
+        "telegram_payment_charge_id":   sp.telegram_payment_charge_id,
+        "provider_payment_charge_id":   sp.provider_payment_charge_id,
+        "currency":                     sp.currency,
+        "total_amount":                 sp.total_amount,
+        "invoice_payload":              sp.invoice_payload,
+        "subscription_expiration_date": sub_exp,
+        "is_recurring":                 is_recurring_flag,
+        "is_first_recurring":           getattr(sp, "is_first_recurring", None),
+        "telegram_id":                  user.id,
+        "username":                     user.username,
+    }
+
+    # Проверяем профиль по telegram_id (первоисточник правды)
+    profile = await get_profile_by_telegram(user.id)
+    if not profile or profile["id"] != profile_id_from_payload:
+        # payload и telegram_id не совпали — это подозрительно, но платёж реальный:
+        # верим текущему telegram_id, если профиль есть
+        log.warning("payload profile_id mismatch: payload=%s, actual=%s (telegram_id=%s)",
+                    profile_id_from_payload, profile["id"] if profile else None, user.id)
+    if not profile:
+        log.error("successful_payment: no profile for telegram_id=%s", user.id)
+        await msg.reply_text(
+            "⚠️ Payment received but we couldn't find your account. "
+            "Please contact support@belfed.com with this code: "
+            f"{sp.telegram_payment_charge_id}"
+        )
+        return
+
+    lang = await get_user_lang(update, profile)
+
+    # Запись в БД через RPC
+    ok = await apply_stars_payment_via_rpc(
+        telegram_charge_id=sp.telegram_payment_charge_id,
+        user_id=profile["id"],
+        amount_stars=sp.total_amount,
+        subscription_expiration_date=sub_exp,
+        paid_at=datetime.now(timezone.utc),
+        raw_event=raw,
+        is_recurring=is_recurring_flag,
+    )
+    if not ok:
+        log.error("apply_stars_payment_via_rpc returned False")
+        await msg.reply_text(
+            "⚠️ Payment received but activation failed. "
+            "Please contact support@belfed.com with this code: "
+            f"{sp.telegram_payment_charge_id}"
+        )
+        return
+
+    # Генерируем invite в EN-group
+    invite = await grant_paid_invite(context, user.id, lang)
+
+    # Читаем свежий expires_at
+    profile_after = await get_profile_by_telegram(user.id)
+    exp = parse_ts(profile_after.get("subscription_expires_at")) if profile_after else None
+    until_str = exp.strftime("%d.%m.%Y") if exp else "—"
+
+    if invite:
+        await msg.reply_text(
+            T(lang, "stars_payment_received").format(until=until_str, invite=invite),
+            disable_web_page_preview=True,
+        )
+    else:
+        await msg.reply_text(
+            T(lang, "stars_payment_no_invite").format(until=until_str),
+            disable_web_page_preview=True,
+        )
+        await send_main_menu(update, context, lang=lang)
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.exception("unhandled error", exc_info=context.error)
 
@@ -829,8 +1070,11 @@ def main():
     app.add_handler(CommandHandler("lang",           cmd_lang))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
+    # Telegram Stars: pre-checkout + successful payment
+    app.add_handler(PreCheckoutQueryHandler(on_pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, on_successful_payment))
     app.add_error_handler(on_error)
-    log.info("BelFed bot (RU+EN multilingual, single plan + trial + email) running")
+    log.info("BelFed bot (RU YooKassa + EN Telegram Stars, multilingual) running")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
