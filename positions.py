@@ -174,19 +174,21 @@ WIZARD_KEY = "positions_new_wizard"
 
 WIZARD_STEPS = [
     "asset_class", "ticker", "direction", "entry", "stop",
-    "target_1", "target_2", "target_3", "publish", "confirm",
+    "target_1", "target_2", "target_3", "grade", "risk", "publish", "confirm",
 ]
 
 WIZARD_PROMPTS = {
-    "asset_class":  "Шаг 1/9. Тип актива: stock или crypto?",
-    "ticker":       "Шаг 2/9. Тикер (например, BTC, AAPL):",
-    "direction":    "Шаг 3/9. Направление: long или short?",
-    "entry":        "Шаг 4/9. Цена входа (число, в USD):",
-    "stop":         "Шаг 5/9. Стоп-лосс (число):",
-    "target_1":     "Шаг 6/9. Цель 1 (число или \"—\" если нет):",
-    "target_2":     "Шаг 7/9. Цель 2 (число или \"—\"):",
-    "target_3":     "Шаг 8/9. Цель 3 (число или \"—\"):",
-    "publish":      "Шаг 9/9. Публиковать в каналы RU/EN сейчас? (yes/no/ru/en)",
+    "asset_class":  "Шаг 1/11. Тип актива: stock или crypto?",
+    "ticker":       "Шаг 2/11. Тикер (например, BTC, AAPL):",
+    "direction":    "Шаг 3/11. Направление: long или short?",
+    "entry":        "Шаг 4/11. Цена входа (число, в USD):",
+    "stop":         "Шаг 5/11. Стоп-лосс (число):",
+    "target_1":     "Шаг 6/11. Цель 1 (число или \"—\" если нет):",
+    "target_2":     "Шаг 7/11. Цель 2 (число или \"—\"):",
+    "target_3":     "Шаг 8/11. Цель 3 (число или \"—\"):",
+    "grade":        "Шаг 9/11.\n📊 Грейд позиции (опционально)\n\nОцени качество сетапа от 1 до 5, где 5 — лучший.\nОтправь число 1-5 или /skip чтобы пропустить.",
+    "risk":         "Шаг 10/11.\n⚖️ Риск (R)\n\nПо умолчанию 1.0R. Введи своё значение (например 0.5, 1.5, 2.0) или /skip для значения по умолчанию.",
+    "publish":      "Шаг 11/11. Публиковать в каналы RU/EN сейчас? (yes/no/ru/en)",
     "confirm":      "Подтвердить создание? (yes/no)",
 }
 
@@ -223,6 +225,17 @@ async def _wizard_summary(d: dict) -> str:
     for i in (1, 2, 3):
         v = d.get(f"target_{i}")
         if v: lines.append(f"T{i}:    {fmt_price(v)}")
+    grade = d.get("grade")
+    if grade is not None:
+        stars = "★" * grade + "☆" * (5 - grade)
+        lines.append(f"Грейд: {stars} ({grade})")
+    else:
+        lines.append("Грейд: —")
+    risk_r = d.get("risk_r")
+    if risk_r is not None:
+        lines.append(f"Риск: {risk_r}R")
+    else:
+        lines.append("Риск: 1.0R (default)")
     lines.append(f"Публикация: {pub_str}")
     return "\n".join(lines)
 
@@ -232,9 +245,11 @@ async def wizard_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not state:
         return False
     text = (update.message.text or "").strip()
-    if text.startswith("/"):
-        return False  # let command handlers deal with it
     step_idx = state["step"]
+    current_step = WIZARD_STEPS[step_idx]
+    # /skip is consumed by grade and risk steps; other slash-commands are passed through
+    if text.startswith("/") and not (text.lower().startswith("/skip") and current_step in ("grade", "risk")):
+        return False  # let command handlers deal with it
     step = WIZARD_STEPS[step_idx]
     d = state["data"]
 
@@ -277,6 +292,25 @@ async def wizard_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("Введи число или '—' чтобы пропустить.")
             return True
         d[step] = v  # may be None
+    elif step == "grade":
+        t = text.strip().lower()
+        if t in ("/skip", "skip", "-"):
+            d["grade"] = None
+        elif t in ("1", "2", "3", "4", "5"):
+            d["grade"] = int(t)
+        else:
+            await update.message.reply_text("Введите число 1-5 или /skip.")
+            return True
+    elif step == "risk":
+        t = text.strip().lower()
+        if t in ("/skip", "skip", "-"):
+            d["risk_r"] = None
+        else:
+            v = _parse_num(text)
+            if v is None or v <= 0 or v > 10:
+                await update.message.reply_text("Введи число от 0.1 до 10 или /skip.")
+                return True
+            d["risk_r"] = v
     elif step == "publish":
         v = text.lower()
         if v in ("yes", "y", "да", "оба", "both"):
@@ -307,6 +341,10 @@ async def wizard_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "publish_to_en": d.get("publish_to_en", False),
                 "status":       "open",
             }
+            if d.get("grade") is not None:
+                body["grade"] = d["grade"]
+            if d.get("risk_r") is not None:
+                body["risk_r"] = d["risk_r"]
             row = await sb_insert("active_positions", body)
             context.user_data.pop(WIZARD_KEY, None)
             if not row:
