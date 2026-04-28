@@ -37,6 +37,8 @@ from telegram.ext import (
     PreCheckoutQueryHandler, ContextTypes, filters,
 )
 
+import positions  # type: ignore  # local module — see positions.py
+
 # ---------- Config ---------------------------------------------------------
 BOT_TOKEN            = os.environ["TELEGRAM_BOT_TOKEN"]
 SUPABASE_URL         = os.environ["SUPABASE_URL"].rstrip("/")
@@ -823,7 +825,11 @@ async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает обычный текст. Сейчас — только email при оплате."""
+    """Обрабатывает обычный текст: positions wizards / email при оплате."""
+    # 1. Positions module (wizards, comments, close-price input) — admin only
+    if await positions.maybe_handle_text(update, context):
+        return
+
     state = context.user_data.get("awaiting_email_for_payment")
     if not state:
         return  # текст вне известных режимов — игнорируем
@@ -854,6 +860,10 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # Positions module callbacks (positions:*) handled separately
+    if (query.data or "").startswith("positions:"):
+        await positions.maybe_handle_callback(update, context)
+        return
     await query.answer()
     user = query.from_user
     data = query.data or ""
@@ -1070,6 +1080,9 @@ def main():
     app.add_handler(CommandHandler("cancel",         cmd_cancel))
     app.add_handler(CommandHandler("cancel_payment", cmd_cancel_payment))
     app.add_handler(CommandHandler("lang",           cmd_lang))
+    # Positions management commands (admin-only) — must register BEFORE the
+    # generic CallbackQueryHandler so command handlers fire first.
+    positions.register(app)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     # Telegram Stars: pre-checkout + successful payment
