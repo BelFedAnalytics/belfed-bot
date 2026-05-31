@@ -312,7 +312,14 @@ TEXTS_RU = {
     "btn_paid":        "📺 Закрытый канал",
     "btn_status":      "📋 Моя подписка",
     "btn_disclaimer":  "⚠️ Disclaimer",
+    "btn_support":     "💬 Поддержка",
     "btn_link":        "🔗 Привязать аккаунт",
+    "support": (
+        "💬 Поддержка BelFed\n────────────────────────\n\n"
+        "Напишите нам — поможем с доступом, оплатой и техническими вопросами.\n\n"
+        "Email: support@belfed.com\n"
+        "Сайт: " + WEB_URL_RU + "/members.html\n────────────────────────"
+    ),
     "no_access":       ("Сначала зарегистрируйтесь на " + WEB_URL_RU + " и привяжите Telegram. "
                         "Получите 14 дней бесплатного доступа — без привязки карты."),
     "trial_claim_ok": (
@@ -425,7 +432,14 @@ TEXTS_EN = {
     "btn_paid":        "📺 Private channel",
     "btn_status":      "📋 My subscription",
     "btn_disclaimer":  "⚠️ Disclaimer",
+    "btn_support":     "💬 Support",
     "btn_link":        "🔗 Link account",
+    "support": (
+        "💬 BelFed Support\n────────────────────────\n\n"
+        "Reach out — we'll help with access, payments and technical questions.\n\n"
+        "Email: support@belfed.com\n"
+        "Site: " + WEB_URL_EN + "/members.html\n────────────────────────"
+    ),
     "no_access":       ("Please sign up at " + WEB_URL_EN + " and link Telegram first. "
                         "Get 14 days of free access — no card required."),
     "trial_claim_ok": (
@@ -649,6 +663,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Если /start пришёл во время сбора email — выходим из режима
     context.user_data.pop("awaiting_email_for_payment", None)
 
+    # Deep-link /start support — показываем поддержку прямо в чате
+    if args and args[0] == "support":
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        await update.message.reply_text(T(lang, "support"), disable_web_page_preview=True)
+        await send_main_menu(update, context, lang=lang)
+        return
+
     # Deep-link /start trial[_xxx][_ru|_en]
     if args and (args[0] == "trial" or args[0].startswith("trial_")):
         source = args[0]
@@ -740,6 +762,7 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not profile:
         rows.append([InlineKeyboardButton(T(lang, "btn_link"), url=f"{web_url}/members.html#link")])
     rows.append([InlineKeyboardButton(T(lang, "btn_disclaimer"), callback_data="disclaimer")])
+    rows.append([InlineKeyboardButton(T(lang, "btn_support"), callback_data="support")])
 
     text = (T(lang, "menu") if profile else T(lang, "welcome_new")).format(name=user.first_name or "")
 
@@ -754,6 +777,12 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T(lang, "link_already"))
     else:
         await update.message.reply_text(T(lang, "need_link"))
+
+async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    profile = await get_profile_by_telegram(user.id)
+    lang = await get_user_lang(update, profile)
+    await update.message.reply_text(T(lang, "support"), disable_web_page_preview=True)
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -932,6 +961,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(T(lang, "disclaimer"))
         return
 
+    if data == "support":
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        await query.message.reply_text(T(lang, "support"), disable_web_page_preview=True)
+        return
+
     if data == "start_payment":
         profile = await get_profile_by_telegram(user.id)
         lang = await get_user_lang(update, profile)
@@ -1077,6 +1112,7 @@ def main():
     app.add_handler(CommandHandler("start",          cmd_start))
     app.add_handler(CommandHandler("link",           cmd_link))
     app.add_handler(CommandHandler("status",         cmd_status))
+    app.add_handler(CommandHandler("support",        cmd_support))
     app.add_handler(CommandHandler("cancel",         cmd_cancel))
     app.add_handler(CommandHandler("cancel_payment", cmd_cancel_payment))
     app.add_handler(CommandHandler("lang",           cmd_lang))
