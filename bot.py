@@ -61,6 +61,10 @@ YOOKASSA_CREATE_URL  = os.environ.get(
     "YOOKASSA_CREATE_PAYMENT_URL",
     f"{SUPABASE_URL}/functions/v1/yookassa-create-payment",
 )
+AUTH_MAGIC_URL       = os.environ.get(
+    "AUTH_MAGIC_URL",
+    f"{SUPABASE_URL}/functions/v1/auth-magic",
+)
 PREVIEW_CHANNEL_URL  = os.environ.get("TELEGRAM_PREVIEW_CHANNEL_URL", "").strip()
 
 # Telegram Stars (EN only) ----------------------------------------------
@@ -314,6 +318,25 @@ TEXTS_RU = {
     "btn_disclaimer":  "⚠️ Disclaimer",
     "btn_support":     "💬 Поддержка",
     "btn_link":        "🔗 Привязать аккаунт",
+    "btn_cabinet":     "🔐 Личный кабинет",
+    "cabinet_new": (
+        "🔐 Личный кабинет BelFed\n────────────────────────\n\n"
+        "Нажмите, чтобы войти (ссылка действует ограниченное время и одноразовая):\n{link}\n\n"
+        "После входа задайте пароль в настройках кабинета — и в следующий раз сможете заходить "
+        "привычным способом: по email и паролю на " + WEB_URL_RU + "."
+    ),
+    "cabinet_has_pw": (
+        "🔐 Личный кабинет BelFed\n────────────────────────\n\n"
+        "Быстрый вход (ссылка одноразовая):\n{link}\n\n"
+        "Также вы всегда можете войти по email и паролю на " + WEB_URL_RU + "."
+    ),
+    "cabinet_fail": (
+        "⚠️ Не удалось создать ссылку для входа. Попробуйте ещё раз через минуту "
+        "или войдите по email и паролю на " + WEB_URL_RU + "."
+    ),
+    "cabinet_no_profile": (
+        "Сначала активируйте доступ — /start. После этого появится вход в личный кабинет."
+    ),
     "support": (
         "💬 Поддержка BelFed\n────────────────────────\n\n"
         "Напишите нам — поможем с доступом, оплатой и техническими вопросами.\n\n"
@@ -434,6 +457,25 @@ TEXTS_EN = {
     "btn_disclaimer":  "⚠️ Disclaimer",
     "btn_support":     "💬 Support",
     "btn_link":        "🔗 Link account",
+    "btn_cabinet":     "🔐 Member dashboard",
+    "cabinet_new": (
+        "🔐 Your BelFed dashboard\n────────────────────────\n\n"
+        "Tap to sign in (single-use link, valid for a limited time):\n{link}\n\n"
+        "Once inside, set a password in your dashboard settings — next time you can sign in "
+        "the usual way with your email and password at " + WEB_URL_EN + "."
+    ),
+    "cabinet_has_pw": (
+        "🔐 Your BelFed dashboard\n────────────────────────\n\n"
+        "Quick sign-in (single-use link):\n{link}\n\n"
+        "You can also always sign in with your email and password at " + WEB_URL_EN + "."
+    ),
+    "cabinet_fail": (
+        "⚠️ Couldn't create your sign-in link. Try again in a minute "
+        "or sign in with your email and password at " + WEB_URL_EN + "."
+    ),
+    "cabinet_no_profile": (
+        "Activate access first — /start. Your dashboard sign-in will appear after that."
+    ),
     "support": (
         "💬 BelFed Support\n────────────────────────\n\n"
         "Reach out — we'll help with access, payments and technical questions.\n\n"
@@ -571,6 +613,49 @@ async def grant_paid_invite(context: ContextTypes.DEFAULT_TYPE,
         log.error("grant_paid_invite failed [lang=%s, chat=%s]: %s", lang, chat_id, e)
         return None
 
+async def issue_cabinet_link(telegram_id: int, lang: str) -> dict | None:
+    """Calls the auth-magic edge function to get a Supabase magic-link for the
+    member dashboard. Returns {action_link, has_password, display_name, lang}
+    or None on failure."""
+    if not BOT_SHARED_SECRET:
+        log.error("BOT_SHARED_SECRET is not set; cannot call auth-magic")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                AUTH_MAGIC_URL,
+                headers={
+                    "Content-Type":  "application/json",
+                    "x-bot-secret":  BOT_SHARED_SECRET,
+                    # anon Authorization required by the functions gateway
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                    "apikey":        SUPABASE_SERVICE_KEY,
+                },
+                json={"tg_id": telegram_id, "lang": lang},
+            )
+        data = r.json()
+        if r.status_code == 200 and data.get("ok"):
+            return data
+        log.warning("auth-magic -> %s %s", r.status_code, str(data)[:200])
+        return None
+    except Exception as e:
+        log.error("issue_cabinet_link failed [tg=%s]: %s", telegram_id, e)
+        return None
+
+async def send_cabinet_link(target, telegram_id: int, lang: str) -> None:
+    """Issues a cabinet magic-link and sends the appropriate message to the user.
+    `target` is a message/callback message object with reply_text."""
+    res = await issue_cabinet_link(telegram_id, lang)
+    if not res:
+        await target.reply_text(T(lang, "cabinet_fail"), disable_web_page_preview=True)
+        return
+    link = res.get("action_link") or ""
+    key = "cabinet_has_pw" if res.get("has_password") else "cabinet_new"
+    await target.reply_text(
+        T(lang, key).format(link=link),
+        disable_web_page_preview=True,
+    )
+
 def has_access(profile: dict | None) -> bool:
     if not profile: return False
     if profile.get("subscription_status") == "admin": return True
@@ -671,6 +756,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_main_menu(update, context, lang=lang)
         return
 
+    # Deep-link /start auth — выдаём ссылку в личный кабинет (из auth.html "Get a fresh link")
+    if args and args[0] == "auth":
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        if not profile:
+            await update.message.reply_text(T(lang, "cabinet_no_profile"))
+        else:
+            await send_cabinet_link(update.message, user.id, lang)
+        return
+
     # Deep-link /start trial[_xxx][_ru|_en]
     if args and (args[0] == "trial" or args[0].startswith("trial_")):
         source = args[0]
@@ -745,6 +840,10 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     rows.append([InlineKeyboardButton(T(lang, "btn_status"), callback_data="sub_status")])
 
+    # Member dashboard (cabinet) sign-in — available to any linked profile.
+    if profile:
+        rows.append([InlineKeyboardButton(T(lang, "btn_cabinet"), callback_data="open_cabinet")])
+
     sub = await get_subscription(profile["id"]) if profile else None
     has_active_paid = sub and sub.get("status") == "active"
     if not has_active_paid and not is_admin(profile):
@@ -777,6 +876,16 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T(lang, "link_already"))
     else:
         await update.message.reply_text(T(lang, "need_link"))
+
+async def cmd_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cabinet — issue a fresh member-dashboard sign-in link via Supabase magic-link."""
+    user = update.effective_user
+    profile = await get_profile_by_telegram(user.id)
+    lang = await get_user_lang(update, profile)
+    if not profile:
+        await update.message.reply_text(T(lang, "cabinet_no_profile"))
+        return
+    await send_cabinet_link(update.message, user.id, lang)
 
 async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -930,6 +1039,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.message.reply_text(T(lang, "paid_invite_fail"))
+        return
+
+    if data == "open_cabinet":
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        if not profile:
+            await query.message.reply_text(T(lang, "cabinet_no_profile")); return
+        await send_cabinet_link(query.message, user.id, lang)
         return
 
     if data == "sub_status":
@@ -1113,6 +1230,7 @@ def main():
     app.add_handler(CommandHandler("link",           cmd_link))
     app.add_handler(CommandHandler("status",         cmd_status))
     app.add_handler(CommandHandler("support",        cmd_support))
+    app.add_handler(CommandHandler("cabinet",        cmd_cabinet))
     app.add_handler(CommandHandler("cancel",         cmd_cancel))
     app.add_handler(CommandHandler("cancel_payment", cmd_cancel_payment))
     app.add_handler(CommandHandler("lang",           cmd_lang))
