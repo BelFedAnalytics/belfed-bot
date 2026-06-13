@@ -1,7 +1,7 @@
 """
 BelFed Analytics — Telegram bot (production, RU + EN multilingual).
 
-Логика триала: 7 дней полного бесплатного доступа в платный канал —
+Логика триала: 14 дней полного бесплатного доступа в платный канал —
 без привязки карты. Юзер кликает t.me/BelfedBot?start=trial_xxx →
 бот определяет язык (или спрашивает при первом /start) → выдаёт
 одноразовый invite в RU или EN closed group. Через 24 часа после
@@ -294,7 +294,7 @@ TEXTS_RU = {
         "Делимся торговыми идеями, обзорами рынков и аналитикой "
         "от ведущих инвест-домов.\n\n"
         "Акции · Криптовалюты · Сырьё · Валюты\n\n"
-        "🎁 7 дней бесплатного доступа — без привязки карты.\n\n"
+        "🎁 14 дней бесплатного доступа — без привязки карты.\n\n"
         f"После триала: подписка {PRICE_RUB} ₽ / мес, отмена в любой момент."
     ),
     "menu":            "// BELFED ANALYTICS\n\nРады видеть вас снова, {name}.",
@@ -308,7 +308,7 @@ TEXTS_RU = {
     "autorenew_off":   "Автопродление: отключено · доступ закончится в указанную дату",
     "need_link":       "Сначала привяжите аккаунт сайта: " + WEB_URL_RU + "/members.html",
     "link_already":    "✅ Аккаунт уже привязан к этому Telegram. /status — посмотреть подписку.",
-    "link_ok":         "✅ Telegram привязан. Бесплатный доступ открыт на 7 дней — без привязки карты.",
+    "link_ok":         "✅ Telegram привязан. Бесплатный доступ открыт на 14 дней — без привязки карты.",
     "link_bad":        "⚠️ Токен недействителен или истёк. Сгенерируйте новый на сайте.",
     "cancel_ok":       "Автопродление отключено. Доступ сохранится до {until}.",
     "cancel_none":     "У вас нет активной подписки для отмены.",
@@ -344,9 +344,9 @@ TEXTS_RU = {
         "Сайт: " + WEB_URL_RU + "/members.html\n────────────────────────"
     ),
     "no_access":       ("Сначала зарегистрируйтесь на " + WEB_URL_RU + " и привяжите Telegram. "
-                        "Получите 7 дней бесплатного доступа — без привязки карты."),
+                        "Получите 14 дней бесплатного доступа — без привязки карты."),
     "trial_claim_ok": (
-        "🎁 7 дней бесплатного доступа открыты.\n\n"
+        "🎁 14 дней бесплатного доступа открыты.\n\n"
         "Ваша персональная ссылка в закрытый канал "
         "(одноразовая, действует 24 часа):\n{invite}\n\n"
         f"После триала: подписка {PRICE_RUB} ₽ / мес. "
@@ -433,7 +433,7 @@ TEXTS_EN = {
         "We share trade ideas, market reviews and research from leading "
         "investment houses.\n\n"
         "Equities · Crypto · Commodities · FX\n\n"
-        "🎁 7 days of free access — no card required.\n\n"
+        "🎁 14 days of free access — no card required.\n\n"
         f"After the trial: ${PRICE_USD} / month, cancel anytime."
     ),
     "menu":            "// BELFED ANALYTICS\n\nGood to see you again, {name}.",
@@ -447,7 +447,7 @@ TEXTS_EN = {
     "autorenew_off":   "Auto-renew: off · access ends on the date above",
     "need_link":       "Please link your account first: " + WEB_URL_EN + "/members.html",
     "link_already":    "✅ Your account is already linked to this Telegram. Use /status to view subscription.",
-    "link_ok":         "✅ Telegram linked. 7 days of free access — no card required.",
+    "link_ok":         "✅ Telegram linked. 14 days of free access — no card required.",
     "link_bad":        "⚠️ Token invalid or expired. Generate a new one on the site.",
     "cancel_ok":       "Auto-renew disabled. Access remains until {until}.",
     "cancel_none":     "You don't have an active subscription to cancel.",
@@ -483,9 +483,9 @@ TEXTS_EN = {
         "Site: " + WEB_URL_EN + "/members.html\n────────────────────────"
     ),
     "no_access":       ("Please sign up at " + WEB_URL_EN + " and link Telegram first. "
-                        "Get 7 days of free access — no card required."),
+                        "Get 14 days of free access — no card required."),
     "trial_claim_ok": (
-        "🎁 7 days of free access unlocked.\n\n"
+        "🎁 14 days of free access unlocked.\n\n"
         "Your personal invite to the private channel "
         "(single-use, valid 24 hours):\n{invite}\n\n"
         f"After the trial: ${PRICE_USD} / month. "
