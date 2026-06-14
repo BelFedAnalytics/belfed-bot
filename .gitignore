@@ -24,3 +24,6 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# VPS root SSH directory (deploy keys live here)
+/.ssh/
