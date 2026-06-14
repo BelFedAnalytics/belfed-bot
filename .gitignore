@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local env / secrets — bot reads from /etc/belfedbot.env on VPS, never commit
+.env
+.env.*
+*.env
+
+# Logs
+*.log
+
+# Local archive of historical backups (kept on VPS at .archive/, not tracked)
+.archive/
+
+# Misc backup file patterns produced by past manual edits
+*.bak
+*.bak.*
+*.backup-*
+*.save
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
