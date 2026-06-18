@@ -407,27 +407,76 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _do_close(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     pos_id: int, exit_price: float):
-    # Fetch position to compute R
+    # Fetch position to compute R.
+    # R-calc parity with positions-publish v40 (`rMultipleSafe × riskMultiplier`
+    # plus partial-close accounting):
+    #   1. Risk denominator uses `initial_stop_price` (frozen at open) so a
+    #      stop trailed to breakeven doesn't blow up the divisor.
+    #   2. Apply `risk_r` per-position weighting (half-size starters etc.).
+    #   3. If stop is at breakeven or better and we'd report a loss, clamp to 0.
+    #   4. Final R = realized_r (locked-in from prior partial closes) +
+    #      remaining_slice * R_at_exit. This matches the publisher's view
+    #      of the lifecycle R after partial closes.
     rows = await sb_select("active_positions",
                            {"id": f"eq.{pos_id}",
-                            "select": "id,ticker,direction,entry_price,stop_price,publish_to_ru,publish_to_en"})
+                            "select": "id,ticker,direction,entry_price,stop_price,initial_stop_price,"
+                                      "risk_r,realized_r,remaining_pct,publish_to_ru,publish_to_en"})
     if not rows:
         await update.message.reply_text("Позиция не найдена.")
         return
     p = rows[0]
-    entry = float(p["entry_price"]); stop = float(p["stop_price"])
-    risk = abs(entry - stop)
-    if p["direction"] == "long":
-        rr = (exit_price - entry) / risk if risk > 0 else 0
+    entry = float(p["entry_price"])
+    # Frozen risk denominator: prefer initial_stop_price; fall back to
+    # current stop_price for legacy rows where it's null.
+    init_stop = p.get("initial_stop_price")
+    stop_for_risk = float(init_stop) if init_stop is not None else float(p["stop_price"])
+    risk = abs(entry - stop_for_risk)
+    direction = p["direction"]
+    # Raw R at exit for the remaining slice.
+    if risk > 0:
+        if direction == "long":
+            r_at_exit = (exit_price - entry) / risk
+        else:
+            r_at_exit = (entry - exit_price) / risk
     else:
-        rr = (entry - exit_price) / risk if risk > 0 else 0
+        r_at_exit = 0.0
+    # Clamp losses to 0 when current stop is at breakeven or better
+    # (mirror rMultipleSafe in positions-publish).
+    current_stop = float(p["stop_price"])
+    stop_safe = (
+        current_stop >= entry if direction == "long" else current_stop <= entry
+    )
+    if r_at_exit < 0 and stop_safe:
+        r_at_exit = 0.0
+    # Per-position risk weighting (defaults to 1.0).
+    risk_r_raw = p.get("risk_r")
+    try:
+        risk_mult = float(risk_r_raw) if risk_r_raw is not None else 1.0
+        if not (risk_mult > 0):
+            risk_mult = 1.0
+    except (TypeError, ValueError):
+        risk_mult = 1.0
+    # Partial-close accounting: realized_r locks in slices already closed;
+    # the remaining slice realises r_at_exit * risk_mult on close.
+    realized_r_raw = p.get("realized_r")
+    try:
+        realized_r = float(realized_r_raw) if realized_r_raw is not None else 0.0
+    except (TypeError, ValueError):
+        realized_r = 0.0
+    remaining_pct_raw = p.get("remaining_pct")
+    try:
+        remaining_pct = float(remaining_pct_raw) if remaining_pct_raw is not None else 100.0
+    except (TypeError, ValueError):
+        remaining_pct = 100.0
+    remaining_pct = max(0.0, min(100.0, remaining_pct))
+    rr = realized_r + r_at_exit * (remaining_pct / 100.0) * risk_mult
 
     from datetime import datetime, timezone
     code = await sb_update("active_positions", {"id": f"eq.{pos_id}"}, {
         "status": "closed",
         "closed_at": datetime.now(timezone.utc).isoformat(),
         "exit_price": exit_price,
-        "result_rr": round(rr, 2),
+        "result_rr": round(rr, 4),
     })
     if code not in (200, 204):
         await update.message.reply_text(f"❌ Ошибка обновления: {code}")
