@@ -1133,6 +1133,100 @@ async def run_gift7_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await send_main_menu(update, context, lang=eff_lang, reply_to=reply_target)
 
 
+# ---------- Promo code win-back flow ------------------------------------
+async def run_promo_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          user_id: int, promo_code: str, lang: str,
+                          reply_target):
+    """Activates a win-back promo code via bot-claim-trial (mode=promo).
+    Resets trial_claim_used, extends trial_end by extra_days, issues invite."""
+    if not BOT_SHARED_SECRET:
+        log.error("BOT_SHARED_SECRET is not set; cannot call bot-claim-trial (promo)")
+        await reply_target.reply_text(T(lang, "trial_claim_error"))
+        await send_main_menu(update, context, lang=lang, reply_to=reply_target)
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{SUPABASE_URL}/functions/v1/bot-claim-trial",
+                headers={
+                    "Content-Type":  "application/json",
+                    "x-bot-secret":  BOT_SHARED_SECRET,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                    "apikey":        SUPABASE_SERVICE_KEY,
+                },
+                json={
+                    "mode":        "promo",
+                    "telegram_id": str(user_id),
+                    "promo_code":  promo_code,
+                    "lang":        lang,
+                },
+            )
+        res = r.json()
+    except Exception as e:
+        log.error("run_promo_flow failed [code=%s]: %s", promo_code, e)
+        await reply_target.reply_text(T(lang, "trial_claim_error"))
+        await send_main_menu(update, context, lang=lang, reply_to=reply_target)
+        return
+
+    if r.status_code == 200 and res.get("ok"):
+        invite    = res.get("invite_link") or "—"
+        trial_end = res.get("trial_end", "")
+        extra     = res.get("extra_days", 7)
+        try:
+            until_str = datetime.fromisoformat(trial_end.replace("Z", "+00:00")).strftime("%d.%m.%Y")
+        except Exception:
+            until_str = trial_end[:10] if trial_end else "—"
+
+        if lang == "en":
+            msg = (
+                f"🎁 Your exclusive 7-day access has been activated!\n\n"
+                f"Your personal invite to the private analytics channel\n"
+                f"(single-use link, valid 24 hours):\n{invite}\n\n"
+                f"Access valid until: {until_str}\n\n"
+                f"After your bonus period you can lock in the Founding Member rate — "
+                f"$10.50/mo permanently."
+            )
+        else:
+            msg = (
+                f"🎁 Ваш эксклюзивный доступ на 7 дней активирован!\n\n"
+                f"Личное приглашение в закрытый аналитический канал\n"
+                f"(одноразовая ссылка, действует 24 часа):\n{invite}\n\n"
+                f"Доступ активен до: {until_str}\n\n"
+                f"После бонусного периода вы сможете закрепить ставку Founding Member — "
+                f"1 050₽/мес навсегда."
+            )
+        await reply_target.reply_text(msg, disable_web_page_preview=True)
+    elif r.status_code == 409 and res.get("error") == "promo_already_used":
+        if lang == "en":
+            await reply_target.reply_text(
+                "⚠️ This promo code has already been used. "
+                "If you think this is a mistake — contact support via /start."
+            )
+        else:
+            await reply_target.reply_text(
+                "⚠️ Этот промокод уже был использован. "
+                "Если это ошибка — напишите в поддержку через /start."
+            )
+    elif r.status_code == 404 and res.get("error") == "profile_not_found":
+        # User has no profile — prompt them to start a trial first
+        if lang == "en":
+            await reply_target.reply_text(
+                "⚠️ It looks like you don't have a BelFed profile yet.\n"
+                "Please use /start to activate your free trial first."
+            )
+        else:
+            await reply_target.reply_text(
+                "⚠️ Похоже, у вас ещё нет профиля BelFed.\n"
+                "Пожалуйста, используйте /start для активации бесплатного пробного доступа."
+            )
+    else:
+        log.warning("run_promo_flow unexpected response [code=%s]: %s %s", promo_code, r.status_code, res)
+        await reply_target.reply_text(T(lang, "trial_claim_error"))
+
+    await send_main_menu(update, context, lang=lang, reply_to=reply_target)
+
+
 # ---------- Payment flow with email collection ---------------------------
 async def start_payment_with_email(query_or_message, context: ContextTypes.DEFAULT_TYPE,
                                     profile: dict, lang: str,
@@ -1596,6 +1690,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               source=source, lang=lang,
                               reply_target=update.message,
                               intent_token=intent_token)
+        return
+
+    # Deep-link /start promo_BFWB-XXXXXX — win-back promo code
+    if args and args[0].startswith("promo_"):
+        raw_code = args[0][len("promo_"):].upper()  # strip "promo_" prefix, uppercase
+        profile = await get_profile_by_telegram(user.id)
+        if profile and profile.get("lang") in ("ru", "en"):
+            lang = profile["lang"]
+        else:
+            lang = "en" if (user.language_code or "").startswith("en") else "ru"
+        await run_promo_flow(update, context, user.id, raw_code, lang,
+                              reply_target=update.message)
         return
 
     # Deep-link /start <token> (привязка через сайт)
