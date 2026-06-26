@@ -56,6 +56,8 @@ TRIBUTE_RU_URL       = os.environ.get("TRIBUTE_RU_URL", "https://t.me/tribute/ap
 TRIBUTE_EN_URL       = os.environ.get("TRIBUTE_EN_URL", "https://t.me/tribute/app?startapp=sXIq")
 PRICE_RUB            = os.environ.get("PRICE_MONTHLY_RUB", "1500")
 PRICE_USD            = os.environ.get("PRICE_MONTHLY_USD", "15")
+FM_PRICE_RUB         = os.environ.get("FM_PRICE_MONTHLY_RUB", "1050")   # Founding Member -30%
+FM_PRICE_USD         = os.environ.get("FM_PRICE_MONTHLY_USD", "10.50")  # Founding Member -30%
 BOT_SHARED_SECRET    = os.environ.get("BOT_SHARED_SECRET", "")
 BOT_CLAIM_TRIAL_URL  = os.environ.get(
     "BOT_CLAIM_TRIAL_URL",
@@ -497,11 +499,11 @@ TEXTS_RU = {
     ),
     "menu":            "// BELFED ANALYTICS\n\nРады видеть вас снова, {name}.",
     "trial_active":    ("🎁 Пробный доступ\nДействует до: {until}\nОсталось: {days} дн.\n\n"
-                        f"Оформить подписку {PRICE_RUB} ₽ / мес: " + TRIBUTE_RU_URL),
+                        f"Оформить подписку {FM_PRICE_RUB} ₽ / мес (−30%): " + TRIBUTE_RU_URL),
     "status_active":   ("✅ Подписка активна\n"
-                        f"План: monthly ({PRICE_RUB} ₽ / мес)\n"
+                        f"План: Founding Member ({FM_PRICE_RUB} ₽ / мес, −30%)\n"
                         "Действует до: {until}\n{autorenew}"),
-    "status_none":     "❌ Подписки нет.\n\n" + f"Оформить ({PRICE_RUB} ₽ / мес): " + TRIBUTE_RU_URL,
+    "status_none":     "❌ Подписки нет.\n\n" + f"Оформить ({FM_PRICE_RUB} ₽ / мес, −30%): " + TRIBUTE_RU_URL,
     "autorenew_on":    "Автопродление: включено",
     "autorenew_off":   "Автопродление: отключено · доступ закончится в указанную дату",
     "need_link":       "Сначала привяжите аккаунт сайта: " + WEB_URL_RU + "/members.html",
@@ -685,11 +687,11 @@ TEXTS_EN = {
     ),
     "menu":            "// BELFED ANALYTICS\n\nGood to see you again, {name}.",
     "trial_active":    ("🎁 Trial access\nValid until: {until}\nDays left: {days}\n\n"
-                        f"Subscribe (${PRICE_USD} / mo): " + TRIBUTE_EN_URL),
+                        f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL),
     "status_active":   ("✅ Subscription active\n"
-                        f"Plan: monthly (${PRICE_USD} / mo)\n"
+                        f"Plan: Founding Member (${FM_PRICE_USD} / mo, −30%)\n"
                         "Valid until: {until}\n{autorenew}"),
-    "status_none":     "❌ No active subscription.\n\n" + f"Subscribe (${PRICE_USD} / mo): " + TRIBUTE_EN_URL,
+    "status_none":     "❌ No active subscription.\n\n" + f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL,
     "autorenew_on":    "Auto-renew: on",
     "autorenew_off":   "Auto-renew: off · access ends on the date above",
     "need_link":       "Please link your account first: " + WEB_URL_EN + "/members.html",
@@ -698,7 +700,7 @@ TEXTS_EN = {
     "link_bad":        "⚠️ Token invalid or expired. Generate a new one on the site.",
     "cancel_ok":       "Auto-renew disabled. Access remains until {until}.",
     "cancel_none":     "You don't have an active subscription to cancel.",
-    "btn_pay":         "⭐️ Founding Member — €9 / mo (−30%)",
+    "btn_pay":         "⭐️ Founding Member — $10.50 / mo (−30%)",
     "btn_paid":        "📺 Private channel",
     "btn_status":      "📋 My subscription",
     "btn_disclaimer":  "⚠️ Disclaimer",
@@ -844,7 +846,7 @@ TEXTS_EN = {
     "pay_no_profile":  "Activate the free trial first — /start",
     "btn_open_pay":    "💳 Open payment page",
     # Telegram Stars (EN users)
-    "btn_pay_stars":   "⭐️ Founding Member — €9 / mo (−30%)",
+    "btn_pay_stars":   "⭐️ Founding Member — $10.50 / mo (−30%)",
     "stars_creating":  "⏳ Preparing your invoice…",
     "stars_pay_link": (
         f"💳 BelFed Premium — ${PRICE_USD} / month\n\n"
