@@ -617,6 +617,11 @@ TEXTS_RU = {
         "⚠️ Временная ошибка при сохранении email. Попробуйте ещё раз через минуту.\n\n"
         "Если повторится — напишите в поддержку через /start → «Связаться с поддержкой»."
     ),
+    "start_temporary": (
+        "⚠️ Временная заминка при создании профиля.\n\n"
+        "Пожалуйста, нажмите /start ещё раз через минуту — обычно достаточно одной попытки. "
+        "Если не получится — мы уже видим проблему и поможем."
+    ),
     "early_bonus_granted": (
         "\n\n🎁 Спасибо, что были с нами с самого начала.\n"
         "В знак благодарности мы добавили **+7 дней** к вашей подписке.\n"
@@ -813,6 +818,11 @@ TEXTS_EN = {
     "email_link_temporary": (
         "⚠️ Temporary error while saving email. Please try again in a minute.\n\n"
         "If it persists — contact support via /start → ‘Contact support’."
+    ),
+    "start_temporary": (
+        "⚠️ Temporary hiccup while creating your profile.\n\n"
+        "Please press /start once more in a minute — usually a single retry is enough. "
+        "If it still fails, we can see the issue on our side and will help."
     ),
     "early_bonus_granted": (
         "\n\n🎁 Thanks for being with us since the beginning.\n"
@@ -2900,9 +2910,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not profile:
                 # Создаём lite-профиль с триалом (тот же RPC что и у trial deep-link).
                 # invite-ссылку намеренно НЕ отдаём сразу — сначала собираем email.
-                _ = await claim_trial_via_edge(user.id, user.username,
-                                                source="telegram_direct", lang=lang)
+                claim_res = await claim_trial_via_edge(user.id, user.username,
+                                                       source="telegram_direct", lang=lang)
                 profile = await get_profile_by_telegram(user.id)
+
+                # ——— Guard: не продвигаем пользователя в email-state, если профиль
+                # не создался. Иначе link_telegram_email RPC вернёт no_profile и
+                # пользователь зависает в цикле "нажмите /start ещё раз".
+                # claim_trial_via_edge возвращает None при 5xx, и dict с ok=false
+                # при 4xx/business-error. Оба случая обрабатываются здесь.
+                if not profile:
+                    log.error(
+                        "lang_menu: profile not created after claim_trial_via_edge "
+                        "telegram_id=%s claim_res=%s",
+                        user.id, claim_res,
+                    )
+                    await query.message.reply_text(T(lang, "start_temporary"))
+                    return
 
             if profile and not is_ghost_email(profile.get("email")) and profile.get("email"):
                 await query.message.reply_text(T(lang, "email_link_reused"))
