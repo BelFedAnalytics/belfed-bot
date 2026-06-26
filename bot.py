@@ -468,7 +468,8 @@ async def get_profile_by_telegram(telegram_id: int) -> dict | None:
         "/rest/v1/profiles",
         params={"telegram_id": f"eq.{telegram_id}",
                 "select": "id,email,telegram_id,lang,subscription_status,"
-                          "subscription_plan,subscription_expires_at,trial_started_at"},
+                          "subscription_plan,subscription_expires_at,trial_started_at,"
+                          "chart_quota_per_day"},
     )
     return rows[0] if rows else None
 
@@ -2032,29 +2033,31 @@ async def _submit_chart_request(reply_target, user, profile, lang: str,
         remaining = d.get("remaining")
         used = d.get("used_24h")
         m = _ASSET_CLASS_META.get(asset_class or "")
+        limit_n = d.get("limit", "")
         if lang == "en":
             class_suffix = f" — {m['en']}" if m else ""
             ok_msg = (f"✅ Request submitted: ${ticker}{class_suffix}\n"
                       f"\n"
                       f"We'll publish a chart update soon and DM you the link.\n"
                       f"\n"
-                      f"Quota: {used}/3 used, {remaining} remaining (rolling 24h).")
+                      f"Quota: {used}/{limit_n} used, {remaining} remaining (rolling 24h).")
         else:
             class_suffix = f" ({m['ru']})" if m else ""
             ok_msg = (f"✅ Запрос принят: ${ticker}{class_suffix}\n"
                       f"\n"
                       f"Скоро опубликуем обновление и пришлём вам ссылку.\n"
                       f"\n"
-                      f"Лимит: {used}/3 использовано, осталось {remaining} (за 24 ч).")
+                      f"Лимит: {used}/{limit_n} использовано, осталось {remaining} (за 24 ч).")
         await reply_target.reply_text(ok_msg)
         return
 
     err_code = (d or {}).get("error", "")
     if err_code == "quota_exceeded":
         reset_h = d.get("reset_in_hours")
-        text = (f"⛔ Daily limit reached (3 / 24h). Try again in ~{reset_h}h."
+        limit_n = d.get("limit", "")
+        text = (f"⛔ Daily limit reached ({limit_n} / 24h). Try again in ~{reset_h}h."
                 if lang == "en" else
-                f"⛔ Суточный лимит исчерпан (3 / 24 ч). Попробуйте через ~{reset_h} ч.")
+                f"⛔ Суточный лимит исчерпан ({limit_n} / 24 ч). Попробуйте через ~{reset_h} ч.")
     elif err_code == "duplicate_pending":
         text = (f"ℹ️ You already have a pending request for ${ticker}. Be patient — we'll deliver it shortly."
                 if lang == "en" else
@@ -2097,8 +2100,9 @@ def _class_picker_text(lang: str) -> str:
     return "К какому классу относится актив?"
 
 
-def _request_prompt_text(lang: str, asset_class: str | None = None) -> str:
+def _request_prompt_text(lang: str, asset_class: str | None = None, quota_per_day: int | None = None) -> str:
     m = _ASSET_CLASS_META.get(asset_class or "")
+    q = quota_per_day if isinstance(quota_per_day, int) and quota_per_day > 0 else 1
     if lang == "en":
         class_label = f" — {m['en']}" if m else ""
         examples = m["examples_en"] if m else "TSLA, BTC, RENDER, EURUSD"
@@ -2106,14 +2110,14 @@ def _request_prompt_text(lang: str, asset_class: str | None = None) -> str:
                 f"\n"
                 f"Examples: {examples}\n"
                 f"\n"
-                f"Limit: 3 requests per 24h.")
+                f"Limit: {q} request{'s' if q != 1 else ''} per 24h.")
     class_label = f" ({m['ru']})" if m else ""
     examples = m["examples_ru"] if m else "TSLA, BTC, RENDER, EURUSD"
     return (f"Ответьте на это сообщение тикером{class_label} (1–8 букв/цифр).\n"
             f"\n"
             f"Примеры: {examples}\n"
             f"\n"
-            f"Лимит: 3 запроса в сутки.")
+            f"Лимит: {q} запрос{'а' if 2 <= q <= 4 else ('ов' if q != 1 else '')} в сутки.")
 
 
 async def cmd_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3073,7 +3077,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         placeholder = _ASSET_CLASS_META[asset_class]["placeholder"]
         await query.message.reply_text(
-            _request_prompt_text(lang, asset_class),
+            _request_prompt_text(lang, asset_class, profile.get("chart_quota_per_day")),
             reply_markup=ForceReply(selective=True, input_field_placeholder=placeholder),
         )
         return
