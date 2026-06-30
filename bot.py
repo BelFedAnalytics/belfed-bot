@@ -1096,6 +1096,12 @@ async def run_gift7_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
                           lang: str, source: str, reply_target):
     """Activate a 7-day gift trial for the user.
 
+    NOTE: this is a DELIBERATELY separate offer from the canonical 14-day BelFed
+    trial (website funnel / `trial_*` deep-links / bot-claim-trial edge fn). It is
+    a shorter channel re-engagement gift reached only via the `gift7` deep-link,
+    so its 7-day window is intentional and must NOT be bumped to 14 when aligning
+    the canonical trial copy.
+
     Three cases (handled by claim_trial_by_telegram RPC):
       1) No profile or profile without trial   -> create/activate 7-day trial + invite
       2) Already active/admin                  -> just re-issue fresh invite link
@@ -1251,13 +1257,19 @@ async def start_payment_with_email(query_or_message, context: ContextTypes.DEFAU
                                     provider: str = "yookassa",
                                     telegram_id: int | None = None):
     # TRIBUTE intercept: all payment now flows through Tribute Founding Member.
+    # Canonical BelFed trial = 14 days (EN + RU must match the website funnel).
+    # NOTE: the *actual* free-trial length is configured per-subscription inside
+    # the Tribute admin panel (RU startapp=sXHG, EN startapp=sXIq), not here — the
+    # bot only describes it. Both Tribute subscriptions must have their free-trial
+    # period set to 14 days for this copy to be truthful. See PR notes / external
+    # config checklist.
     _trib = TRIBUTE_EN_URL if lang == "en" else TRIBUTE_RU_URL
     _kb = InlineKeyboardMarkup([[InlineKeyboardButton(T(lang, "btn_pay"), url=_trib)]])
     _msg = ("⭐️ Оформите подписку Founding Member через Tribute.\n"
             "14 дней бесплатно · отмена в любой момент."
             if lang != "en" else
             "⭐️ Subscribe as a Founding Member via Tribute.\n"
-            "7-day free trial · cancel anytime.")
+            "14-day free trial · cancel anytime.")
     await query_or_message.reply_text(_msg, reply_markup=_kb, disable_web_page_preview=True)
     return
     """Универсальный вход в оплату (YooKassa или Stars).
@@ -2930,7 +2942,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Обычный trial flow + founding follow-up как раньше
         intro = ("✨ Запускаем 14-дневный триал. После него вы сможете оформить founding-подписку."
                  if lang == "ru" else
-                 "✨ Starting your 7-day trial. After that you can claim the founding price.")
+                 "✨ Starting your 14-day trial. After that you can claim the founding price.")
         await query.message.reply_text(intro)
         await run_trial_flow(update, context, user.id, user.username,
                               source=source, lang=lang,
