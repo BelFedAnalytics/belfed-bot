@@ -468,8 +468,7 @@ async def get_profile_by_telegram(telegram_id: int) -> dict | None:
         "/rest/v1/profiles",
         params={"telegram_id": f"eq.{telegram_id}",
                 "select": "id,email,telegram_id,lang,subscription_status,"
-                          "subscription_plan,subscription_expires_at,trial_started_at,"
-                          "chart_quota_per_day"},
+                          "subscription_plan,subscription_expires_at,trial_started_at"},
     )
     return rows[0] if rows else None
 
@@ -477,9 +476,15 @@ async def get_subscription(user_id: str) -> dict | None:
     rows = await sb_get(
         "/rest/v1/subscriptions",
         params={"user_id": f"eq.{user_id}",
-                "select": "status,plan_code,current_period_end,cancel_at_period_end,payment_method_id"},
+                "select": "status,plan_code,current_period_end,cancel_at_period_end,payment_method_id",
+                "order": "current_period_end.desc.nullslast"},
     )
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    for r in rows:
+        if r.get("status") == "active":
+            return r
+    return rows[0]
 
 def parse_ts(s: str | None):
     if not s: return None
@@ -1064,7 +1069,7 @@ async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         f"$10.50/mo instead of ${PRICE_USD}/mo — 30% off forever, "
                         "even when our standard price changes later.\n"
                         "\n"
-                        "Plus: priority review of asset requests, founding status "
+                        "Plus: 3 asset requests per day (priority), founding status "
                         "tied to your account, pause anytime with 60 days to come back.\n"
                         "\n"
                         "Tap the button below to open the in-bot payment screen."
@@ -1534,8 +1539,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Скидка сохраняется при любом изменении базовой цены в будущем.\n"
                 f"\n"
                 f"// 02\n"
-                f"Приоритетная обработка ваших запросов на разбор активов — "
-                f"ваши заявки рассматриваются вне общей очереди.\n"
+                f"3 заявки на разбор актива в день с приоритетным рассмотрением. "
+                f"После закрытия программы новые пользователи будут получать 1/день — "
+                f"у вас остаётся 3, навсегда.\n"
                 f"\n"
                 f"// 03\n"
                 f"Статус Founding Member привязан к вашему аккаунту. Подписку можно "
@@ -1567,8 +1573,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"The discount stays no matter how our pricing changes later.\n"
                 f"\n"
                 f"// 02\n"
-                f"Priority review of your asset requests — your submissions "
-                f"are handled ahead of the standard queue.\n"
+                f"3 asset requests per day with priority review. New users will get 1/day "
+                f"after the program closes — you keep 3, permanently.\n"
                 f"\n"
                 f"// 03\n"
                 f"Founding Member status tied to your account. Pause anytime — 60 days "
@@ -2032,31 +2038,29 @@ async def _submit_chart_request(reply_target, user, profile, lang: str,
         remaining = d.get("remaining")
         used = d.get("used_24h")
         m = _ASSET_CLASS_META.get(asset_class or "")
-        limit_n = d.get("limit", "")
         if lang == "en":
             class_suffix = f" — {m['en']}" if m else ""
             ok_msg = (f"✅ Request submitted: ${ticker}{class_suffix}\n"
                       f"\n"
                       f"We'll publish a chart update soon and DM you the link.\n"
                       f"\n"
-                      f"Quota: {used}/{limit_n} used, {remaining} remaining (rolling 24h).")
+                      f"Quota: {used}/3 used, {remaining} remaining (rolling 24h).")
         else:
             class_suffix = f" ({m['ru']})" if m else ""
             ok_msg = (f"✅ Запрос принят: ${ticker}{class_suffix}\n"
                       f"\n"
                       f"Скоро опубликуем обновление и пришлём вам ссылку.\n"
                       f"\n"
-                      f"Лимит: {used}/{limit_n} использовано, осталось {remaining} (за 24 ч).")
+                      f"Лимит: {used}/3 использовано, осталось {remaining} (за 24 ч).")
         await reply_target.reply_text(ok_msg)
         return
 
     err_code = (d or {}).get("error", "")
     if err_code == "quota_exceeded":
         reset_h = d.get("reset_in_hours")
-        limit_n = d.get("limit", "")
-        text = (f"⛔ Daily limit reached ({limit_n} / 24h). Try again in ~{reset_h}h."
+        text = (f"⛔ Daily limit reached (3 / 24h). Try again in ~{reset_h}h."
                 if lang == "en" else
-                f"⛔ Суточный лимит исчерпан ({limit_n} / 24 ч). Попробуйте через ~{reset_h} ч.")
+                f"⛔ Суточный лимит исчерпан (3 / 24 ч). Попробуйте через ~{reset_h} ч.")
     elif err_code == "duplicate_pending":
         text = (f"ℹ️ You already have a pending request for ${ticker}. Be patient — we'll deliver it shortly."
                 if lang == "en" else
@@ -2099,9 +2103,8 @@ def _class_picker_text(lang: str) -> str:
     return "К какому классу относится актив?"
 
 
-def _request_prompt_text(lang: str, asset_class: str | None = None, quota_per_day: int | None = None) -> str:
+def _request_prompt_text(lang: str, asset_class: str | None = None) -> str:
     m = _ASSET_CLASS_META.get(asset_class or "")
-    q = quota_per_day if isinstance(quota_per_day, int) and quota_per_day > 0 else 1
     if lang == "en":
         class_label = f" — {m['en']}" if m else ""
         examples = m["examples_en"] if m else "TSLA, BTC, RENDER, EURUSD"
@@ -2109,14 +2112,14 @@ def _request_prompt_text(lang: str, asset_class: str | None = None, quota_per_da
                 f"\n"
                 f"Examples: {examples}\n"
                 f"\n"
-                f"Limit: {q} request{'s' if q != 1 else ''} per 24h.")
+                f"Limit: 3 requests per 24h.")
     class_label = f" ({m['ru']})" if m else ""
     examples = m["examples_ru"] if m else "TSLA, BTC, RENDER, EURUSD"
     return (f"Ответьте на это сообщение тикером{class_label} (1–8 букв/цифр).\n"
             f"\n"
             f"Примеры: {examples}\n"
             f"\n"
-            f"Лимит: {q} запрос{'а' if 2 <= q <= 4 else ('ов' if q != 1 else '')} в сутки.")
+            f"Лимит: 3 запроса в сутки.")
 
 
 async def cmd_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2731,8 +2734,9 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Скидка сохраняется при любом изменении базовой цены в будущем.\n"
                 f"\n"
                 f"// 02\n"
-                f"Приоритетная обработка ваших запросов на разбор активов — "
-                f"ваши заявки рассматриваются вне общей очереди.\n"
+                f"3 заявки на разбор актива в день с приоритетным рассмотрением. "
+                f"После закрытия программы новые пользователи будут получать 1/день — "
+                f"у вас остаётся 3, навсегда.\n"
                 f"\n"
                 f"// 03\n"
                 f"Статус Founding Member привязан к вашему аккаунту. Подписку можно "
@@ -2762,8 +2766,8 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"The discount stays no matter how our pricing changes later.\n"
                 f"\n"
                 f"// 02\n"
-                f"Priority review of your asset requests — your submissions "
-                f"are handled ahead of the standard queue.\n"
+                f"3 asset requests per day with priority review. New users will get 1/day "
+                f"after the program closes — you keep 3, permanently.\n"
                 f"\n"
                 f"// 03\n"
                 f"Founding Member status tied to your account. Pause anytime — 60 days "
@@ -3133,7 +3137,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         placeholder = _ASSET_CLASS_META[asset_class]["placeholder"]
         await query.message.reply_text(
-            _request_prompt_text(lang, asset_class, profile.get("chart_quota_per_day")),
+            _request_prompt_text(lang, asset_class),
             reply_markup=ForceReply(selective=True, input_field_placeholder=placeholder),
         )
         return
