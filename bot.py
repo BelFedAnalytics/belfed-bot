@@ -2284,6 +2284,64 @@ async def cmd_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_dm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: /dm <telegram_id> [html:] <text…> — sends a free-form
+    support message from BelFed Support to any user by telegram_id.
+    Unlike /reply, this is NOT tied to a feedback ticket.
+
+    Optional HTML: prefix the message body with `html:` to render the text
+    with parse_mode=HTML (bold, links via <a href="…">…</a>, etc.).
+    Example:
+      /dm 8022425516 Hi Syed — your trial is active again.
+      /dm 8022425516 html: Open your <a href="https://belfed.com/members.html">dashboard</a>.
+    """
+    user = update.effective_user
+    if user.id not in ADMIN_TELEGRAM_IDS:
+        return  # silently ignore
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /dm <telegram_id> [html:] <text…>"
+        )
+        return
+    try:
+        target_tg = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ telegram_id must be an integer.")
+        return
+
+    rest = args[1:]
+    parse_mode = None
+    # Optional HTML mode: body starts with a `html:` token.
+    if rest and rest[0].lower() in ("html:", "html"):
+        parse_mode = "HTML"
+        rest = rest[1:]
+    msg_text = " ".join(rest).strip()
+    if not msg_text:
+        await update.message.reply_text("❌ Empty message.")
+        return
+
+    header = "📩 Message from BelFed Support:"
+    if parse_mode == "HTML":
+        body = f"<b>{header}</b>\n\n{msg_text}"
+    else:
+        body = f"{header}\n\n{msg_text}"
+    try:
+        sent = await context.bot.send_message(
+            chat_id=target_tg, text=body, parse_mode=parse_mode
+        )
+    except Exception as e:
+        log.exception("cmd_dm: send_message failed")
+        await update.message.reply_text(
+            f"❌ Failed to deliver to {target_tg}: {e}\n"
+            f"(User may have never started the bot, or blocked it.)"
+        )
+        return
+    await update.message.reply_text(
+        f"✅ Message delivered to tg={target_tg} (msg_id={sent.message_id})."
+    )
+
+
 async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_TELEGRAM_IDS:
@@ -3535,6 +3593,7 @@ def main():
     app.add_handler(CommandHandler("payments",       cmd_payments))
     app.add_handler(CommandHandler("subscribers",    cmd_subscribers))
     app.add_handler(CommandHandler("reply",          cmd_reply))
+    app.add_handler(CommandHandler("dm",             cmd_dm))
     # Positions management commands (admin-only) — must register BEFORE the
     # generic CallbackQueryHandler so command handlers fire first.
     positions.register(app)
