@@ -40,6 +40,7 @@ from telegram.ext import (
 )
 
 import positions  # type: ignore  # local module — see positions.py
+from link_token import looks_like_link_token  # local module — see link_token.py
 
 # ---------- Config ---------------------------------------------------------
 BOT_TOKEN            = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -516,6 +517,7 @@ TEXTS_RU = {
     "link_already":    "✅ Аккаунт уже привязан к этому Telegram. /status — посмотреть подписку.",
     "link_ok":         "✅ Telegram привязан. Бесплатный доступ открыт на 14 дней — без привязки карты.",
     "link_bad":        "⚠️ Токен недействителен или истёк. Сгенерируйте новый на сайте.",
+    "link_taken":      "⚠️ Этот Telegram уже привязан к другому аккаунту BelFed. Один Telegram нельзя связать с двумя аккаунтами. Войдите на сайте под нужным аккаунтом или напишите в поддержку.",
     "cancel_ok":       "Автопродление отключено. Доступ сохранится до {until}.",
     "cancel_none":     "У вас нет активной подписки для отмены.",
     "btn_pay":         "⭐️ Founding Member — 1050 ₽ / мес (−30%)",
@@ -704,6 +706,7 @@ TEXTS_EN = {
     "link_already":    "✅ Your account is already linked to this Telegram. Use /status to view subscription.",
     "link_ok":         "✅ Telegram linked. 14 days of free access — no card required.",
     "link_bad":        "⚠️ Token invalid or expired. Generate a new one on the site.",
+    "link_taken":      "⚠️ This Telegram account is already linked to a different BelFed account. One Telegram can't be linked to two accounts. Sign in on the site with the right account, or contact support.",
     "cancel_ok":       "Auto-renew disabled. Access remains until {until}.",
     "cancel_none":     "You don't have an active subscription to cancel.",
     "btn_pay":         "⭐️ Founding Member — $10.50 / mo (−30%)",
@@ -1734,16 +1737,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               reply_target=update.message)
         return
 
-    # Deep-link /start <token> (привязка через сайт)
-    if args and len(args[0]) >= 16:
+    # Deep-link /start <token> (web-first привязка через сайт).
+    # Only real hex link tokens reach here — named payloads like members_en /
+    # members_bottom_en fall through to the plain /start flow below.
+    if args and looks_like_link_token(args[0]):
         token = args[0]
-        status, _ = await sb_post(
+        status, data = await sb_post(
             "/rest/v1/rpc/claim_telegram_link",
             {"p_token": token, "p_telegram_id": user.id, "p_username": user.username or ""},
         )
+        # claim_telegram_link now returns jsonb {ok, error, ...}.
+        ok  = status in (200, 201) and isinstance(data, dict) and data.get("ok") is True
+        err = data.get("error") if isinstance(data, dict) else None
+        # Refresh AFTER the claim so the profile reflects the just-linked account.
         profile = await get_profile_by_telegram(user.id)
         lang = await get_user_lang(update, profile)
-        if status in (200, 201):
+        if ok:
             if is_admin(profile):
                 await update.message.reply_text("✅ Telegram linked. Admin access." if lang=="en"
                                                  else "✅ Telegram привязан. Доступ администратора.")
@@ -1756,6 +1765,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         T(lang, "paid_invite_msg").format(link=link),
                         disable_web_page_preview=True,
                     )
+        elif err == "telegram_already_linked":
+            # This Telegram is bound to a different profile (e.g. admin). Never
+            # move it silently — tell the user clearly instead.
+            await update.message.reply_text(T(lang, "link_taken"))
         else:
             await update.message.reply_text(T(lang, "link_bad"))
         await send_main_menu(update, context, lang=lang)
