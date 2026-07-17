@@ -97,6 +97,47 @@ def is_valid_email(s: str | None) -> bool:
 def is_ghost_email(s: str | None) -> bool:
     return bool(s) and s.lower().endswith("@belfed.local")
 
+# ---------- Failure diagnostics (sanitized, log-safe) ---------------------
+# JWT-like tokens (service-role key, anon key) and bearer secrets must never
+# reach the logs verbatim. sanitize_diag() redacts them before any error body
+# is logged so we can log upstream responses without leaking credentials/PII.
+_JWT_RE     = re.compile(r"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}")
+_BEARER_RE  = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
+_APIKEY_RE  = re.compile(r"(?i)(apikey|x-bot-secret|authorization)\s*[:=]\s*\"?[^\s\"',}]+")
+
+def sanitize_diag(text: str | None, limit: int = 300) -> str:
+    """Redact secret-like tokens from an upstream body and truncate for logging."""
+    if not text:
+        return ""
+    s = _JWT_RE.sub("[REDACTED_JWT]", str(text))
+    s = _BEARER_RE.sub("bearer [REDACTED]", s)
+    s = _APIKEY_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", s)
+    s = " ".join(s.split())  # collapse whitespace/newlines
+    return s[:limit]
+
+def classify_claim_trial_failure(status_code: int | None, body: str | None) -> str:
+    """Return a short, stable, greppable tag for a claim-trial failure.
+
+    Detects the 2026-07-17 production incident signature: two overloaded
+    public.claim_trial_by_telegram functions make PostgREST 5-arg RPC
+    resolution ambiguous (PGRST203), surfacing as HTTP 500 from the
+    bot-claim-trial edge function. The DB fix (drop/rename the legacy
+    overload) is server-side; this tag makes the incident instantly
+    recognizable in the bot logs.
+    """
+    b = (body or "").lower()
+    if "pgrst203" in b or "could not choose the best candidate function" in b:
+        return "ambiguous_rpc_overload"
+    if "pgrst202" in b or "could not find the function" in b:
+        return "rpc_not_found"
+    if "pgrst" in b:
+        return "postgrest_error"
+    if status_code is not None and status_code >= 500:
+        return "upstream_5xx"
+    if status_code is not None and status_code >= 400:
+        return "upstream_4xx"
+    return "unknown"
+
 # ---------- Supabase REST helpers -----------------------------------------
 SB_HEADERS = {
     "apikey":        SUPABASE_SERVICE_KEY,
@@ -271,7 +312,18 @@ async def claim_trial_via_edge(telegram_id: int, username: str | None,
             except Exception:
                 data = None
             if r.status_code >= 500:
-                log.error("bot-claim-trial 5xx [lang=%s]: %s %s", lang, r.status_code, r.text[:300])
+                tag = classify_claim_trial_failure(r.status_code, r.text)
+                log.error(
+                    "bot-claim-trial 5xx [lang=%s tag=%s]: %s %s",
+                    lang, tag, r.status_code, sanitize_diag(r.text),
+                )
+                if tag == "ambiguous_rpc_overload":
+                    log.error(
+                        "bot-claim-trial: PostgREST cannot resolve overloaded "
+                        "public.claim_trial_by_telegram (PGRST203). Server-side fix "
+                        "required: drop/rename the legacy overload so one signature "
+                        "remains. See incident 2026-07-17."
+                    )
                 return None
             return data
     except Exception as e:
@@ -1127,7 +1179,15 @@ async def run_gift7_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         },
     )
     if status not in (200, 204) or not isinstance(res, dict):
-        log.error("gift7: RPC failed status=%s body=%s", status, res)
+        tag = classify_claim_trial_failure(status, None if res is None else str(res))
+        log.error("gift7: RPC failed [tag=%s] status=%s body=%s",
+                  tag, status, sanitize_diag(None if res is None else str(res)))
+        if tag == "ambiguous_rpc_overload":
+            log.error(
+                "gift7: PostgREST cannot resolve overloaded "
+                "public.claim_trial_by_telegram (PGRST203). Server-side fix "
+                "required: drop/rename the legacy overload. See incident 2026-07-17."
+            )
         await reply_target.reply_text(T(lang, "trial_claim_error"))
         await send_main_menu(update, context, lang=lang, reply_to=reply_target)
         return
