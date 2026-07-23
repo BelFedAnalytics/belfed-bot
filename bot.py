@@ -74,6 +74,13 @@ AUTH_MAGIC_URL       = os.environ.get(
 )
 PREVIEW_CHANNEL_URL  = os.environ.get("TELEGRAM_PREVIEW_CHANNEL_URL", "").strip()
 
+# Admin observability feature flags -------------------------------------
+# When true, bot DMs ADMIN_TELEGRAM_IDS on each new trial activation.
+# Default false so the switch is explicit; enable via env on VPS.
+ADMIN_NOTIFY_TRIAL_ENABLED = os.environ.get(
+    "ADMIN_NOTIFY_TRIAL_ENABLED", "false"
+).strip().lower() in ("1", "true", "yes", "on")
+
 # Telegram Stars (EN only) ----------------------------------------------
 # 956 Stars ≈ $15 buyer pays / ~$12.43 creator earns at $0.01569/Star. Period must be 2592000 (30d).
 STARS_PRICE          = int(os.environ.get("STARS_PRICE_MONTHLY", "956"))
@@ -1006,6 +1013,9 @@ async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await reply_target.reply_text(T(lang, "trial_claim_error"))
         await send_main_menu(update, context, lang=lang, reply_to=reply_target)
         return
+
+    # Admin observability: DM admins on new trial signup (skips already_active/errors internally)
+    await notify_admins_new_trial(context, update.effective_user, source, lang, res)
 
     if res.get("ok"):
         invite = res.get("invite_link") or "—"
@@ -2670,6 +2680,9 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(T(lang, "trial_claim_error"))
             return
 
+        # Admin observability: DM admins on new trial signup
+        await notify_admins_new_trial(context, user, source, lang, res_trial)
+
         # Теперь link: если email уже зарегистрирован на сайте — мерджит lite-профиль
         # в существующий. Если email новый — просто привязывает к lite-профилю.
         res_link = await link_telegram_email_via_rpc(user.id, text, user.username)
@@ -3003,6 +3016,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # invite-ссылку намеренно НЕ отдаём сразу — сначала собираем email.
                 claim_res = await claim_trial_via_edge(user.id, user.username,
                                                        source="telegram_direct", lang=lang)
+                # Admin observability: DM admins on new trial signup
+                await notify_admins_new_trial(context, user, "telegram_direct", lang, claim_res)
                 profile = await get_profile_by_telegram(user.id)
 
                 # ——— Guard: не продвигаем пользователя в email-state, если профиль
@@ -3220,6 +3235,64 @@ async def on_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await pcq.answer(ok=False, error_message="Internal error")
         except Exception:
             pass
+
+
+# ---------- Admin notification: new trial signup ------------------------
+async def notify_admins_new_trial(
+    context: ContextTypes.DEFAULT_TYPE,
+    user,                       # telegram.User
+    source: str,
+    lang: str,
+    claim_res: dict | None,
+):
+    """Send a short admin DM whenever a new trial profile is activated.
+
+    Best-effort: errors are logged, not raised — trial flow must never fail
+    because of a notification glitch. Behind ADMIN_NOTIFY_TRIAL_ENABLED flag
+    (default false) — set env ADMIN_NOTIFY_TRIAL_ENABLED=true on VPS to enable.
+
+    Dedup rules:
+      * skip when ADMIN_NOTIFY_TRIAL_ENABLED is false
+      * skip when claim_res is None (edge call failed)
+      * skip when ok=false (trial_already_used and other errors)
+      * skip when already_active=true (user re-clicked an existing trial link)
+    """
+    if not ADMIN_NOTIFY_TRIAL_ENABLED:
+        return
+    if not claim_res or not claim_res.get("ok"):
+        return
+    if claim_res.get("already_active"):
+        return
+    try:
+        tg_username = ("@" + user.username) if user.username else "—"
+        full_name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
+        trial_end = claim_res.get("trial_end") or ""
+        try:
+            end_display = datetime.fromisoformat(
+                trial_end.replace("Z", "+00:00")
+            ).strftime("%d.%m.%Y") if trial_end else "—"
+        except Exception:
+            end_display = trial_end[:10] if trial_end else "—"
+        eff_lang = claim_res.get("lang") or lang or "—"
+
+        text = (
+            "🎁 New trial signup\n"
+            "\n"
+            f"User: {tg_username} ({full_name})\n"
+            f"TG ID: {user.id}\n"
+            f"Lang: {eff_lang}\n"
+            f"Source: {source or '—'}\n"
+            "\n"
+            f"Trial ends: {end_display}"
+        )
+
+        for admin_tg in ADMIN_TELEGRAM_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_tg, text=text)
+            except Exception as e:
+                log.error("trial notify: failed to send to %s: %s", admin_tg, e)
+    except Exception as e:
+        log.error("notify_admins_new_trial: unexpected error: %s", e)
 
 
 # ---------- Admin notification: new paid subscription --------------------
