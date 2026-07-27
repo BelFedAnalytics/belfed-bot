@@ -1,0 +1,79 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: git pull + restart belfedbot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -t rsa,ecdsa,ed25519 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy and restart
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$VPS_USER@$VPS_HOST" bash -eo pipefail <<'REMOTE'
+            set -euo pipefail
+            cd /home/belfed
+
+            echo "::group::Before"
+            git log -1 --oneline
+            echo "::endgroup::"
+
+            git fetch --all --prune
+            git reset --hard origin/prod
+
+            echo "::group::After"
+            git log -1 --oneline
+            echo "::endgroup::"
+
+            # Syntax check before restarting — never ship a file that won't import.
+            python3 -m py_compile bot.py
+
+            systemctl restart belfedbot
+            sleep 3
+
+            if ! systemctl is-active --quiet belfedbot; then
+              echo "belfedbot failed to start — dumping logs" >&2
+              journalctl -u belfedbot -n 40 --no-pager >&2
+              exit 1
+            fi
+
+            echo "belfedbot is active"
+            journalctl -u belfedbot -n 10 --no-pager
+          REMOTE
+
+      - name: Verify deployed commit matches this workflow run
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          REMOTE_SHA="$(ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'git -C /home/belfed rev-parse HEAD')"
+          echo "expected: $SHA"
+          echo "on VPS:   $REMOTE_SHA"
+          if [ "$REMOTE_SHA" != "$SHA" ]; then
+            echo "::error::Deployed SHA does not match the pushed commit"
+            exit 1
+          fi
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
