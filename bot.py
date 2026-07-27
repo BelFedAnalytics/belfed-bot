@@ -494,9 +494,19 @@ async def get_subscription(user_id: str) -> dict | None:
             return r
     return rows[0]
 
+_ISO_FRAC_RE = re.compile(r'(\.\d+)(?=[+\-Z]|$)')
+
 def parse_ts(s: str | None):
+    """Robust ISO 8601 parser: normalises fractional seconds to 6 digits so it
+    works on Python <3.11 (fromisoformat there only accepts 3 or 6 fractional
+    digits — Postgres emits variable length, e.g. `.61693` = 5 digits)."""
     if not s: return None
-    try: return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    s = s.replace("Z", "+00:00")
+    def _pad(m: re.Match) -> str:
+        frac = m.group(1)[1:]  # drop leading '.'
+        return "." + (frac + "000000")[:6]
+    s = _ISO_FRAC_RE.sub(_pad, s)
+    try: return datetime.fromisoformat(s)
     except Exception: return None
 
 # ---------- UI тексты: RU + EN -------------------------------------------
