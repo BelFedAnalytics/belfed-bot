@@ -10,8 +10,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: never restart production on code that fails on production's own Python.
+  # deploy.yml cannot `needs:` a job in test.yml, so the prod-parity run is
+  # repeated here. Keep the Python version in sync with the prod-parity entry in
+  # test.yml and with /usr/bin/python3 on the VPS.
+  gate:
+    name: tests on prod's Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - run: python -m py_compile bot.py positions.py link_token.py
+      - run: python -m unittest discover -s tests -v
+
   deploy:
     name: git pull + restart belfedbot
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -23,41 +44,118 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -t rsa,ecdsa,ed25519 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy and restart
+      - name: Deploy, verify, roll back on failure
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          SHA: ${{ github.sha }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$VPS_USER@$VPS_HOST" bash -eo pipefail <<'REMOTE'
-            set -euo pipefail
-            cd /home/belfed
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$VPS_USER@$VPS_HOST" bash <<'REMOTE'
+          # Deliberately no `set -e`: a failure must trigger the rollback path,
+          # not abort the script and leave the bot dead.
+          set -uo pipefail
 
-            echo "::group::Before"
-            git log -1 --oneline
-            echo "::endgroup::"
+          SERVICE=belfedbot
+          cd /home/belfed || { echo "::error::/home/belfed missing"; exit 1; }
 
-            git fetch --all --prune
-            git reset --hard origin/prod
+          # NRestarts can come back empty on some systemd versions; a bare
+          # `[ "$x" -gt ... ]` on an empty string is a hard shell error, so
+          # normalise to an integer here rather than at each comparison.
+          restarts() {
+            local v
+            v="$(systemctl show "$SERVICE" -p NRestarts --value 2>/dev/null)"
+            case "$v" in
+              ''|*[!0-9]*) echo 0 ;;
+              *) echo "$v" ;;
+            esac
+          }
 
-            echo "::group::After"
-            git log -1 --oneline
-            echo "::endgroup::"
+          PREV_SHA="$(git rev-parse HEAD)"
+          PREV_RESTARTS="$(restarts)"
+          echo "current commit: $PREV_SHA"
+          echo "NRestarts before: $PREV_RESTARTS"
 
-            # Syntax check before restarting — never ship a file that won't import.
-            python3 -m py_compile bot.py
-
-            systemctl restart belfedbot
-            sleep 3
-
-            if ! systemctl is-active --quiet belfedbot; then
-              echo "belfedbot failed to start — dumping logs" >&2
-              journalctl -u belfedbot -n 40 --no-pager >&2
-              exit 1
+          # --- rollback helper -------------------------------------------------
+          # Restores the previous commit and brings the service back up. Called
+          # from every failure branch below.
+          rollback() {
+            echo "::warning::Rolling back to $PREV_SHA — reason: $1"
+            git reset --hard "$PREV_SHA" || echo "::error::git reset failed during rollback"
+            systemctl restart "$SERVICE" || echo "::error::restart failed during rollback"
+            sleep 5
+            if systemctl is-active --quiet "$SERVICE"; then
+              echo "rollback OK — $SERVICE is active on $(git rev-parse --short HEAD)"
+            else
+              echo "::error::ROLLBACK FAILED — $SERVICE is DOWN and needs manual attention"
+              journalctl -u "$SERVICE" -n 50 --no-pager >&2
             fi
+          }
 
-            echo "belfedbot is active"
-            journalctl -u belfedbot -n 10 --no-pager
+          # --- fetch new code --------------------------------------------------
+          if ! git fetch --all --prune; then
+            echo "::error::git fetch failed — nothing changed, service untouched"
+            exit 1
+          fi
+          if ! git reset --hard origin/prod; then
+            rollback "git reset to origin/prod failed"
+            exit 1
+          fi
+          NEW_SHA="$(git rev-parse HEAD)"
+          echo "new commit: $NEW_SHA"
+          git log -1 --oneline
+
+          if [ "$PREV_SHA" = "$NEW_SHA" ]; then
+            echo "commit unchanged — restarting anyway to pick up config"
+          fi
+
+          # --- pre-flight: never restart on code that won't even compile -------
+          if ! python3 -m py_compile bot.py positions.py link_token.py; then
+            rollback "py_compile failed on the new commit"
+            exit 1
+          fi
+
+          # --- restart ---------------------------------------------------------
+          if ! systemctl restart "$SERVICE"; then
+            rollback "systemctl restart failed"
+            exit 1
+          fi
+
+          sleep 5
+          if ! systemctl is-active --quiet "$SERVICE"; then
+            echo "::error::$SERVICE not active 5s after restart"
+            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            rollback "service not active after restart"
+            exit 1
+          fi
+
+          # --- settle check: catch a crash loop that starts, dies, restarts ----
+          # A bad token or failed Supabase handshake dies a few seconds in, so
+          # is-active immediately after restart is not sufficient evidence.
+          sleep 10
+          if ! systemctl is-active --quiet "$SERVICE"; then
+            echo "::error::$SERVICE died within 15s of starting"
+            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            rollback "service died during settle window"
+            exit 1
+          fi
+
+          NEW_RESTARTS="$(restarts)"
+          echo "NRestarts after: $NEW_RESTARTS"
+          if [ "$NEW_RESTARTS" -gt "$((PREV_RESTARTS + 1))" ]; then
+            echo "::error::NRestarts jumped $PREV_RESTARTS -> $NEW_RESTARTS: crash loop"
+            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            rollback "crash loop detected via NRestarts"
+            exit 1
+          fi
+
+          # --- confirm the bot actually reached its main loop ------------------
+          if journalctl -u "$SERVICE" --since "-30s" --no-pager | grep -q "Application started"; then
+            echo "confirmed: Application started"
+          else
+            echo "::warning::did not see 'Application started' in the last 30s of logs"
+          fi
+
+          echo "$SERVICE is active on $NEW_SHA"
+          journalctl -u "$SERVICE" -n 15 --no-pager
           REMOTE
 
       - name: Verify deployed commit matches this workflow run
@@ -70,7 +168,7 @@ jobs:
           echo "expected: $SHA"
           echo "on VPS:   $REMOTE_SHA"
           if [ "$REMOTE_SHA" != "$SHA" ]; then
-            echo "::error::Deployed SHA does not match the pushed commit"
+            echo "::error::Deployed SHA does not match the pushed commit — the deploy step may have rolled back"
             exit 1
           fi
 

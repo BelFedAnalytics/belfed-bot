@@ -494,18 +494,52 @@ async def get_subscription(user_id: str) -> dict | None:
             return r
     return rows[0]
 
-_ISO_FRAC_RE = re.compile(r'(\.\d+)(?=[+\-Z]|$)')
+# Canonicalises the ISO 8601 shapes Postgres/PostgREST actually emit before
+# handing them to datetime.fromisoformat(). Needed because fromisoformat() on
+# Python < 3.11 is strict in two ways the server is not:
+#   1. fractional seconds must be exactly 3 or 6 digits, but Postgres trims
+#      trailing zeros -> `.61693` (5 digits) raises ValueError
+#   2. UTC offsets must be ±HH:MM, but Postgres emits `+00` -> raises ValueError
+# Both bit production on 2026-07-27: an active subscriber's expiry failed to
+# parse, parse_ts returned None, and has_access() read that as "no subscription".
+# See tests/test_parse_ts.py. This is a no-op on 3.11+.
+_ISO_RE = re.compile(
+    r'^(?P<date>\d{4}-\d{2}-\d{2})'
+    r'(?:[T ](?P<time>\d{2}:\d{2}(?::\d{2})?)'
+    r'(?:\.(?P<frac>\d+))?'
+    r'(?P<tz>Z|z|[+-]\d{2}(?::?\d{2})?)?)?$'
+)
 
 def parse_ts(s: str | None):
-    """Robust ISO 8601 parser: normalises fractional seconds to 6 digits so it
-    works on Python <3.11 (fromisoformat there only accepts 3 or 6 fractional
-    digits — Postgres emits variable length, e.g. `.61693` = 5 digits)."""
+    """Parse an ISO 8601 timestamp, tolerating every shape Postgres emits.
+
+    Returns None for falsy or unparseable input rather than raising — callers
+    treat None as "unknown", so a parse failure must never look like a real
+    value. Normalises fractional seconds to 6 digits and short UTC offsets to
+    ±HH:MM so Python 3.10 accepts them.
+    """
+    if not s or not isinstance(s, str): return None
+    s = s.strip()
     if not s: return None
-    s = s.replace("Z", "+00:00")
-    def _pad(m: re.Match) -> str:
-        frac = m.group(1)[1:]  # drop leading '.'
-        return "." + (frac + "000000")[:6]
-    s = _ISO_FRAC_RE.sub(_pad, s)
+
+    m = _ISO_RE.match(s)
+    if m:
+        time = m.group("time") or "00:00:00"
+        if len(time) == 5: time += ":00"          # HH:MM -> HH:MM:SS
+        out = f'{m.group("date")}T{time}'
+        frac = m.group("frac")
+        if frac: out += "." + (frac + "000000")[:6]
+        tz = m.group("tz")
+        if tz:
+            if tz in ("Z", "z"):                 # Zulu
+                tz = "+00:00"
+            elif len(tz) == 3:                    # +03    -> +03:00
+                tz += ":00"
+            elif len(tz) == 5:                    # +0300  -> +03:00
+                tz = tz[:3] + ":" + tz[3:]
+            out += tz
+        s = out
+
     try: return datetime.fromisoformat(s)
     except Exception: return None
 
