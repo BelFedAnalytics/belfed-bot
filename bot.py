@@ -1796,17 +1796,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               reply_target=update.message)
         return
 
-    # Deep-link /start <agency>_<pool>_<text>_<creative>_<channel> — платная
-    # реклама в Telegram Ads. Payload сохраняется в source ЦЕЛИКОМ и без
-    # изменений: разбор на составляющие живёт в SQL-вьюхе отчёта, поэтому схему
-    # payload можно поменять задним числом, не потеряв историю атрибуции.
+    # Deep-link платной рекламы (Telegram Ads), например
+    #   p-c_t-1_k-1_g-u_c-signals_stock
+    # Payload сохраняется в source ЦЕЛИКОМ и без изменений; разбор на
+    # составляющие живёт в SQL-вьюхе отчёта, поэтому схему payload можно
+    # поменять задним числом, не потеряв историю атрибуции. Разбор здесь —
+    # только для лога и выбора языка.
     if args and is_ad_payload(args[0]):
         source = args[0]
         parsed = parse_ad_payload(source)
         log.info(
-            "ad-deeplink /start raw=%s agency=%s pool=%s text=%s creative=%s channel=%s tg_id=%s",
-            source, parsed["agency"], parsed["pool"], parsed["text_code"],
-            parsed["creative_code"], parsed["channel"], user.id,
+            "ad-deeplink /start raw=%s scheme=%s pool=%s text=%s creative=%s "
+            "targeting=%s placement=%s channel=%s unparsed=%s tg_id=%s",
+            source, parsed["scheme"], parsed["pool"], parsed["text_code"],
+            parsed["creative_code"], parsed["targeting"], parsed["placement"],
+            parsed["channel"], parsed["unparsed"], user.id,
         )
 
         # Язык: только из служебных сегментов payload (имя канала игнорируем —
