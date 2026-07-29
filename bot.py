@@ -41,6 +41,11 @@ from telegram.ext import (
 
 import positions  # type: ignore  # local module — see positions.py
 from link_token import looks_like_link_token  # local module — see link_token.py
+from ad_attribution import (  # local module — see ad_attribution.py
+    is_ad_payload,
+    parse_ad_payload,
+    detect_lang_from_ad_payload,
+)
 
 # ---------- Config ---------------------------------------------------------
 BOT_TOKEN            = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -1788,6 +1793,50 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lang = "en" if (user.language_code or "").startswith("en") else "ru"
         await run_promo_flow(update, context, user.id, raw_code, lang,
+                              reply_target=update.message)
+        return
+
+    # Deep-link /start <agency>_<pool>_<text>_<creative>_<channel> — платная
+    # реклама в Telegram Ads. Payload сохраняется в source ЦЕЛИКОМ и без
+    # изменений: разбор на составляющие живёт в SQL-вьюхе отчёта, поэтому схему
+    # payload можно поменять задним числом, не потеряв историю атрибуции.
+    if args and is_ad_payload(args[0]):
+        source = args[0]
+        parsed = parse_ad_payload(source)
+        log.info(
+            "ad-deeplink /start raw=%s agency=%s pool=%s text=%s creative=%s channel=%s tg_id=%s",
+            source, parsed["agency"], parsed["pool"], parsed["text_code"],
+            parsed["creative_code"], parsed["channel"], user.id,
+        )
+
+        # Язык: только из служебных сегментов payload (имя канала игнорируем —
+        # юзернеймы вроде profinansy_ru дали бы ложное срабатывание), затем
+        # профиль, иначе спрашиваем пользователя.
+        lang_from_src = detect_lang_from_ad_payload(parsed)
+        profile = await get_profile_by_telegram(user.id)
+        if lang_from_src:
+            lang = lang_from_src
+        elif profile and profile.get("lang") in ("ru", "en"):
+            lang = profile["lang"]
+        else:
+            # Сохраняем сырой payload — ветка lang_trial заберёт его после
+            # выбора языка и передаст в run_trial_flow как source.
+            context.user_data["pending_trial_source"] = source
+            trial_greeting = (
+                "👋 Welcome to BelFed Analytics!\n"
+                "Please choose your language to start your free trial.\n"
+                "\n"
+                "👋 Добро пожаловать в BelFed Analytics!\n"
+                "Выберите язык, чтобы начать бесплатный пробный период."
+            )
+            await update.message.reply_text(
+                trial_greeting,
+                reply_markup=lang_pick_keyboard("lang_trial"),
+            )
+            return
+
+        await run_trial_flow(update, context, user.id, user.username,
+                              source=source, lang=lang,
                               reply_target=update.message)
         return
 

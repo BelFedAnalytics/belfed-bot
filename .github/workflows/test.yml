@@ -44,7 +44,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Byte-compile
-        run: python -m py_compile bot.py positions.py link_token.py
+        run: python -m py_compile bot.py positions.py link_token.py ad_attribution.py
 
       - name: Unit tests
         run: python -m unittest discover -s tests -v
