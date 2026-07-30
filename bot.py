@@ -25,6 +25,7 @@ ENV:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -130,6 +131,27 @@ async def sb_post(path: str, body: dict):
         try: data = r.json()
         except Exception: data = None
         return r.status_code, data
+
+async def log_ad_click(telegram_id: int, username: str | None, payload: str) -> None:
+    """Зафиксировать переход по рекламной ссылке.
+
+    payload пишется дословно — разбор на составляющие живёт в SQL
+    (public.parse_ad_payload), поэтому конвенцию агентства можно распознать
+    задним числом и перечитать всю историю.
+
+    Ошибка телеметрии никогда не должна ломать /start — только лог.
+    """
+    try:
+        status, data = await sb_post("/rest/v1/ad_clicks", {
+            "telegram_id": telegram_id,
+            "username": username or None,
+            "payload": payload,
+        })
+        if status not in (200, 201, 204):
+            log.error("ad_clicks insert failed: %s %s", status, data)
+    except Exception as e:
+        log.error("ad_clicks insert error: %s", e)
+
 
 # ---------- Founding Members RPCs ----------------------------------------
 async def resolve_payment_price_via_rpc(user_id: str) -> dict | None:
@@ -1805,6 +1827,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args and is_ad_payload(args[0]):
         source = args[0]
         parsed = parse_ad_payload(source)
+
+        # Клик фиксируем СРАЗУ, до всякой логики языка и триала. Иначе
+        # человек, который пришёл с рекламы и закрыл бота на экране выбора
+        # языка, останется невидимым — а для холодного трафика это главная
+        # точка потерь. create_task, а не await: задержка первого экрана ради
+        # телеметрии сама создавала бы отвал, который мы измеряем.
+        asyncio.create_task(log_ad_click(user.id, user.username, source))
+
         log.info(
             "ad-deeplink /start raw=%s scheme=%s pool=%s text=%s creative=%s "
             "targeting=%s placement=%s channel=%s unparsed=%s tg_id=%s",
