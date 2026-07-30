@@ -599,7 +599,7 @@ TEXTS_RU = {
     "cancel_ok":       "Автопродление отключено. Доступ сохранится до {until}.",
     "cancel_none":     "У вас нет активной подписки для отмены.",
     "btn_pay":         "⭐️ Founding Member — 1050 ₽ / мес (−30%)",
-    "btn_paid":        "📺 Закрытый канал",
+    "btn_paid":        "📺 Закрытая группа",
     "btn_status":      "📋 Моя подписка",
     "btn_disclaimer":  "⚠️ Disclaimer",
     "btn_request":     "Запросить актив",
@@ -631,14 +631,14 @@ TEXTS_RU = {
                         "Получите 14 дней бесплатного доступа — без привязки карты."),
     "trial_claim_ok": (
         "🎁 14 дней бесплатного доступа открыты.\n\n"
-        "Ваша персональная ссылка в закрытый канал "
+        "Ваша персональная ссылка в закрытую группу "
         "(одноразовая, действует 24 часа):\n{invite}\n\n"
         f"После триала: подписка {PRICE_RUB} ₽ / мес. "
         "Email понадобится только при первой оплате — для чека."
     ),
     "trial_claim_already_active": (
         "✅ У вас уже есть активный доступ.\n\n"
-        "Свежая ссылка в закрытый канал "
+        "Свежая ссылка в закрытую группу "
         "(одноразовая, действует 24 часа):\n{invite}"
     ),
     "trial_claim_used": (
@@ -659,8 +659,8 @@ TEXTS_RU = {
         "Прошлые результаты не гарантируют доходности в будущем.\n\n"
         "belfed.ru\n────────────────────────"
     ),
-    "paid_invite_msg": "📺 Ваша ссылка в закрытый канал (1 час, одноразовая):\n{link}",
-    "paid_invite_fail":"⚠️ Не удалось создать ссылку. Проверьте, что бот — администратор канала.",
+    "paid_invite_msg": "📺 Ваша ссылка в закрытую группу (1 час, одноразовая):\n{link}",
+    "paid_invite_fail":"⚠️ Не удалось создать ссылку. Проверьте, что бот — администратор группы.",
     "lang_pick_title": "🌐 Choose language / Выберите язык:",
     "btn_lang_ru":     "🇷🇺 Русский",
     "btn_lang_en":     "🇬🇧 English",
@@ -724,7 +724,7 @@ TEXTS_RU = {
     "pay_link": (
         f"💳 Оплата подписки — {PRICE_RUB} ₽ / мес\n\n"
         "Перейдите по ссылке для оплаты (безопасная страница YooKassa):\n{url}\n\n"
-        "После оплаты вернитесь в этот чат — я пришлю персональный invite в закрытый канал."
+        "После оплаты вернитесь в этот чат — я пришлю персональный invite в закрытую группу."
     ),
     "pay_error":       "⚠️ Не удалось создать платёж. Попробуйте через минуту.",
     "pay_no_profile":  "Сначала активируйте бесплатный доступ — /start",
@@ -738,7 +738,7 @@ TEXTS_RU = {
         "через Telegram, без карты и дополнительной регистрации. "
         "Подписка автоматически продлевается каждые 30 дней — отменить "
         "можно в любой момент в настройках Telegram.\n\n"
-        "После оплаты я пришлю персональную ссылку в закрытый канал."
+        "После оплаты я пришлю персональную ссылку в закрытую группу."
     ),
     "btn_open_stars_pay": f"💳 Оформить — ${PRICE_USD} / мес",
     "stars_invoice_hint": (
@@ -750,13 +750,13 @@ TEXTS_RU = {
         "✅ Оплата получена! Спасибо.\n\n"
         "Подписка активна до: {until}\n"
         "Автопродление: включено\n\n"
-        "Ваша персональная ссылка в закрытый канал "
+        "Ваша персональная ссылка в закрытую группу "
         "(одноразовая, действует 1 час):\n{invite}"
     ),
     "stars_payment_no_invite": (
         "✅ Оплата получена! Подписка активна до: {until}\n\n"
-        "Не удалось автоматически создать ссылку в канал. "
-        "Нажмите «📺 Закрытый канал» в меню — я выдам её."
+        "Не удалось автоматически создать ссылку в группу. "
+        "Нажмите «📺 Закрытая группа» в меню — я выдам её."
     ),
 }
 
@@ -788,7 +788,7 @@ TEXTS_EN = {
     "cancel_ok":       "Auto-renew disabled. Access remains until {until}.",
     "cancel_none":     "You don't have an active subscription to cancel.",
     "btn_pay":         "⭐️ Founding Member — $10.50 / mo (−30%)",
-    "btn_paid":        "📺 Private channel",
+    "btn_paid":        "📺 Private group",
     "btn_status":      "📋 My subscription",
     "btn_disclaimer":  "⚠️ Disclaimer",
     "btn_request":     "Request asset",
@@ -820,25 +820,25 @@ TEXTS_EN = {
                         "Get 14 days of free access — no card required."),
     "trial_claim_ok": (
         "🎁 14 days of free access unlocked.\n\n"
-        "Your personal invite to the private channel "
+        "Your personal invite to the private group "
         "(single-use, valid 24 hours):\n{invite}\n\n"
         f"After the trial: ${PRICE_USD} / month. "
         "Email only at first payment — for the receipt."
     ),
     "trial_claim_already_active": (
         "✅ You already have active access.\n\n"
-        "Fresh invite to the private channel "
+        "Fresh invite to the private group "
         "(single-use, valid 24 hours):\n{invite}"
     ),
     "gift7_ok": (
         "🎁 Gift for our early community: 7 days of access unlocked.\n\n"
-        "Your personal invite to the private channel "
+        "Your personal invite to the private group "
         "(single-use, valid 24 hours):\n{invite}\n\n"
         "After 7 days: subscribe whenever you wish. No auto-charges."
     ),
     "gift7_already_active": (
         "✅ You already have active access — no gift needed.\n\n"
-        "Fresh invite link to the private channel "
+        "Fresh invite link to the private group "
         "(single-use, valid 24 hours):\n{invite}"
     ),
     "gift7_already_used": (
@@ -863,8 +863,8 @@ TEXTS_EN = {
         "Past performance does not guarantee future results.\n\n"
         "belfed.com\n────────────────────────"
     ),
-    "paid_invite_msg": "📺 Your invite to the private channel (1 hour, single-use):\n{link}",
-    "paid_invite_fail":"⚠️ Couldn't create invite. Make sure the bot is admin of the channel.",
+    "paid_invite_msg": "📺 Your invite to the private group (1 hour, single-use):\n{link}",
+    "paid_invite_fail":"⚠️ Couldn't create invite. Make sure the bot is admin of the group.",
     "lang_pick_title": "🌐 Choose language / Выберите язык:",
     "btn_lang_ru":     "🇷🇺 Русский",
     "btn_lang_en":     "🇬🇧 English",
@@ -927,7 +927,7 @@ TEXTS_EN = {
     "pay_link": (
         f"💳 Subscription — {PRICE_RUB} RUB / month (~${PRICE_USD})\n\n"
         "Open the secure YooKassa payment page:\n{url}\n\n"
-        "After payment, return to this chat — I'll send your personal invite to the private channel."
+        "After payment, return to this chat — I'll send your personal invite to the private group."
     ),
     "pay_error":       "⚠️ Couldn't create payment. Please try again in a minute.",
     "pay_no_profile":  "Activate the free trial first — /start",
@@ -941,7 +941,7 @@ TEXTS_EN = {
         "through Telegram — no card or extra registration required. "
         "The subscription auto-renews every 30 days and can be cancelled "
         "anytime in your Telegram settings.\n\n"
-        "After payment I'll send your personal invite to the private channel."
+        "After payment I'll send your personal invite to the private group."
     ),
     "btn_open_stars_pay": f"💳 Subscribe — ${PRICE_USD} / mo",
     "stars_invoice_hint": (
@@ -953,13 +953,13 @@ TEXTS_EN = {
         "✅ Payment received. Thank you!\n\n"
         "Subscription active until: {until}\n"
         "Auto-renew: on\n\n"
-        "Your personal invite to the private channel "
+        "Your personal invite to the private group "
         "(single-use, valid 1 hour):\n{invite}"
     ),
     "stars_payment_no_invite": (
         "✅ Payment received. Subscription active until: {until}\n\n"
-        "Couldn't create the channel invite automatically. "
-        "Tap “📺 Private channel” in the menu — I'll send it."
+        "Couldn't create the group invite automatically. "
+        "Tap “📺 Private group” in the menu — I'll send it."
     ),
 }
 
@@ -1289,7 +1289,7 @@ async def run_promo_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if lang == "en":
             msg = (
                 f"🎁 Your exclusive 7-day access has been activated!\n\n"
-                f"Your personal invite to the private analytics channel\n"
+                f"Your personal invite to the private analytics group\n"
                 f"(single-use link, valid 24 hours):\n{invite}\n\n"
                 f"Access valid until: {until_str}\n\n"
                 f"After your bonus period you can lock in the Founding Member rate — "
@@ -1298,7 +1298,7 @@ async def run_promo_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         else:
             msg = (
                 f"🎁 Ваш эксклюзивный доступ на 7 дней активирован!\n\n"
-                f"Личное приглашение в закрытый аналитический канал\n"
+                f"Личное приглашение в закрытую аналитическую группу\n"
                 f"(одноразовая ссылка, действует 24 часа):\n{invite}\n\n"
                 f"Доступ активен до: {until_str}\n\n"
                 f"После бонусного периода вы сможете закрепить ставку Founding Member — "
@@ -1515,8 +1515,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         is_paid = await check_paid_membership(user.id, lang)
         if not is_paid:
-            txt = ("⚠️ Доступ к дашборду доступен только участникам платного канала. Активируйте подписку ниже:") if lang == "ru" else \
-                  ("⚠️ Dashboard access is for paid channel members. Activate your subscription below:")
+            txt = ("⚠️ Доступ к дашборду доступен только участникам платной группы. Активируйте подписку ниже:") if lang == "ru" else \
+                  ("⚠️ Dashboard access is for paid group members. Activate your subscription below:")
             await update.message.reply_text(txt)
             await send_main_menu(update, context, lang=lang)
             return
@@ -1530,8 +1530,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         url = f"{DASHBOARD_AUTH_URL}?t={ott}"
         btn_label = "📊 Открыть дашборд" if lang == "ru" else "📊 Open Dashboard"
-        msg = ("Вы в платном канале — открываем дашборд.\n\nСсылка действует 5 минут.") if lang == "ru" else \
-              ("You're a paid channel member — open the dashboard.\n\nLink is valid for 5 minutes.")
+        msg = ("Вы в платной группе — открываем дашборд.\n\nСсылка действует 5 минут.") if lang == "ru" else \
+              ("You're a paid group member — open the dashboard.\n\nLink is valid for 5 minutes.")
         await update.message.reply_text(
             msg,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(btn_label, url=url)]]),
