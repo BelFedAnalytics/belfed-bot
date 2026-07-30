@@ -25,6 +25,7 @@ ENV:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -41,6 +42,11 @@ from telegram.ext import (
 
 import positions  # type: ignore  # local module — see positions.py
 from link_token import looks_like_link_token  # local module — see link_token.py
+from ad_attribution import (  # local module — see ad_attribution.py
+    is_ad_payload,
+    parse_ad_payload,
+    detect_lang_from_ad_payload,
+)
 
 # ---------- Config ---------------------------------------------------------
 BOT_TOKEN            = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -125,6 +131,27 @@ async def sb_post(path: str, body: dict):
         try: data = r.json()
         except Exception: data = None
         return r.status_code, data
+
+async def log_ad_click(telegram_id: int, username: str | None, payload: str) -> None:
+    """Зафиксировать переход по рекламной ссылке.
+
+    payload пишется дословно — разбор на составляющие живёт в SQL
+    (public.parse_ad_payload), поэтому конвенцию агентства можно распознать
+    задним числом и перечитать всю историю.
+
+    Ошибка телеметрии никогда не должна ломать /start — только лог.
+    """
+    try:
+        status, data = await sb_post("/rest/v1/ad_clicks", {
+            "telegram_id": telegram_id,
+            "username": username or None,
+            "payload": payload,
+        })
+        if status not in (200, 201, 204):
+            log.error("ad_clicks insert failed: %s %s", status, data)
+    except Exception as e:
+        log.error("ad_clicks insert error: %s", e)
+
 
 # ---------- Founding Members RPCs ----------------------------------------
 async def resolve_payment_price_via_rpc(user_id: str) -> dict | None:
@@ -1788,6 +1815,62 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lang = "en" if (user.language_code or "").startswith("en") else "ru"
         await run_promo_flow(update, context, user.id, raw_code, lang,
+                              reply_target=update.message)
+        return
+
+    # Deep-link платной рекламы (Telegram Ads), например
+    #   p-c_t-1_k-1_g-u_c-signals_stock
+    # Payload сохраняется в source ЦЕЛИКОМ и без изменений; разбор на
+    # составляющие живёт в SQL-вьюхе отчёта, поэтому схему payload можно
+    # поменять задним числом, не потеряв историю атрибуции. Разбор здесь —
+    # только для лога и выбора языка.
+    if args and is_ad_payload(args[0]):
+        source = args[0]
+        parsed = parse_ad_payload(source)
+
+        # Клик фиксируем СРАЗУ, до всякой логики языка и триала. Иначе
+        # человек, который пришёл с рекламы и закрыл бота на экране выбора
+        # языка, останется невидимым — а для холодного трафика это главная
+        # точка потерь. create_task, а не await: задержка первого экрана ради
+        # телеметрии сама создавала бы отвал, который мы измеряем.
+        asyncio.create_task(log_ad_click(user.id, user.username, source))
+
+        log.info(
+            "ad-deeplink /start raw=%s scheme=%s pool=%s text=%s creative=%s "
+            "targeting=%s placement=%s channel=%s unparsed=%s tg_id=%s",
+            source, parsed["scheme"], parsed["pool"], parsed["text_code"],
+            parsed["creative_code"], parsed["targeting"], parsed["placement"],
+            parsed["channel"], parsed["unparsed"], user.id,
+        )
+
+        # Язык: только из служебных сегментов payload (имя канала игнорируем —
+        # юзернеймы вроде profinansy_ru дали бы ложное срабатывание), затем
+        # профиль, иначе спрашиваем пользователя.
+        lang_from_src = detect_lang_from_ad_payload(parsed)
+        profile = await get_profile_by_telegram(user.id)
+        if lang_from_src:
+            lang = lang_from_src
+        elif profile and profile.get("lang") in ("ru", "en"):
+            lang = profile["lang"]
+        else:
+            # Сохраняем сырой payload — ветка lang_trial заберёт его после
+            # выбора языка и передаст в run_trial_flow как source.
+            context.user_data["pending_trial_source"] = source
+            trial_greeting = (
+                "👋 Welcome to BelFed Analytics!\n"
+                "Please choose your language to start your free trial.\n"
+                "\n"
+                "👋 Добро пожаловать в BelFed Analytics!\n"
+                "Выберите язык, чтобы начать бесплатный пробный период."
+            )
+            await update.message.reply_text(
+                trial_greeting,
+                reply_markup=lang_pick_keyboard("lang_trial"),
+            )
+            return
+
+        await run_trial_flow(update, context, user.id, user.username,
+                              source=source, lang=lang,
                               reply_target=update.message)
         return
 
