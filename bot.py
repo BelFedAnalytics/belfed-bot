@@ -1071,6 +1071,17 @@ def lang_pick_keyboard(payload_prefix: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(TEXTS_EN["btn_lang_en"], callback_data=f"{payload_prefix}|en"),
     ]])
 
+def resolve_trial_response_context(
+    requested_lang: str,
+    requested_source: str,
+    response: dict,
+) -> tuple[str, str]:
+    """Prefer locale and attribution resolved from a signed web trial intent."""
+    response_lang = response.get("lang")
+    effective_lang = response_lang if response_lang in ("ru", "en") else requested_lang
+    effective_source = response.get("source") or requested_source
+    return effective_lang, effective_source
+
 # ---------- Trial flow (общая для start и для callback) ------------------
 async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
                          user_id: int, username: str | None,
@@ -1085,26 +1096,34 @@ async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await send_main_menu(update, context, lang=lang, reply_to=reply_target)
         return
 
+    effective_lang, effective_source = resolve_trial_response_context(lang, source, res)
+
     # Admin observability: DM admins on new trial signup (skips already_active/errors internally)
-    await notify_admins_new_trial(context, update.effective_user, source, lang, res)
+    await notify_admins_new_trial(
+        context,
+        update.effective_user,
+        effective_source,
+        effective_lang,
+        res,
+    )
 
     if res.get("ok"):
         invite = res.get("invite_link") or "—"
         if res.get("already_active"):
             await reply_target.reply_text(
-                T(lang, "trial_claim_already_active").format(invite=invite),
+                T(effective_lang, "trial_claim_already_active").format(invite=invite),
                 disable_web_page_preview=True,
             )
         else:
             await reply_target.reply_text(
-                T(lang, "trial_claim_ok").format(invite=invite),
+                T(effective_lang, "trial_claim_ok").format(invite=invite),
                 disable_web_page_preview=True,
             )
         # Web-dashboard follow-up: приглашаем юзера зарегистрироваться
         # на сайте, чтобы получить доступ к веб-лК (привязка TG↔веб
         # произойдёт автоматически через merge_lite_into_full).
         try:
-            if lang == "ru":
+            if effective_lang == "ru":
                 wa_url = "https://belfed.ru/members.html"
                 wa_btn = "🌐 Открыть belfed.ru/members.html"
                 wa_txt = (
@@ -1132,10 +1151,10 @@ async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Кнопка ведёт на тот же deep-link — сейчас у юзера уже есть
         # профиль после триала, поэтому сработает Сценарий A:
         #   ensure_pending_founding_claim → resolve_payment_price → invoice.
-        if source and source.startswith("founding"):
+        if effective_source and effective_source.startswith("founding"):
             try:
                 bot_username = (context.bot.username or "BelfedBot")
-                if lang == "ru":
+                if effective_lang == "ru":
                     fnd_url = f"https://t.me/{bot_username}?start=founding_ru"
                     fnd_btn = "✨ Оформить Founding 1050₽/мес"
                     fnd_txt = (
@@ -1168,11 +1187,11 @@ async def run_trial_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
     else:
         err = res.get("error")
         if err == "trial_already_used":
-            await reply_target.reply_text(T(lang, "trial_claim_used"))
+            await reply_target.reply_text(T(effective_lang, "trial_claim_used"))
         else:
-            log.warning("claim_trial returned error [lang=%s]: %s", lang, res)
-            await reply_target.reply_text(T(lang, "trial_claim_error"))
-    await send_main_menu(update, context, lang=lang, reply_to=reply_target)
+            log.warning("claim_trial returned error [lang=%s]: %s", effective_lang, res)
+            await reply_target.reply_text(T(effective_lang, "trial_claim_error"))
+    await send_main_menu(update, context, lang=effective_lang, reply_to=reply_target)
 
 # ---------- Gift7 flow (channel re-engagement) ---------------------------
 async def run_gift7_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
