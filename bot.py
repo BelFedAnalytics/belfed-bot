@@ -677,6 +677,11 @@ TEXTS_RU = {
         "Свежая ссылка в закрытый канал "
         "(одноразовая, действует 24 часа):\n{invite}"
     ),
+    "invite_no_access": (
+        "⚠️ Доступ к закрытому каналу сейчас не активен.\n\n"
+        "Откройте пробный доступ или оформите подписку через меню ниже, "
+        "и я сразу пришлю персональную ссылку."
+    ),
     "trial_claim_used": (
         "⚠️ Триал на этот Telegram-аккаунт уже был активирован ранее.\n\n"
         f"Чтобы продолжить, оформите подписку {PRICE_RUB} ₽ / мес: "
@@ -892,6 +897,11 @@ TEXTS_EN = {
         "⚠️ You've already used your trial access in the past.\n\n"
         "Activate a subscription from the menu below — we'll bring you back."
     ),
+    "invite_no_access": (
+        "⚠️ Access to the private channel is not active right now.\n\n"
+        "Start your trial or subscribe from the menu below and I will send "
+        "your personal link straight away."
+    ),
     "trial_claim_used": (
         "⚠️ The trial for this Telegram account has already been used.\n\n"
         f"To continue, subscribe (${PRICE_USD} / mo): "
@@ -1040,8 +1050,13 @@ async def get_user_lang(update: Update, profile: dict | None = None) -> str:
 
 # ---------- Helpers -------------------------------------------------------
 async def grant_paid_invite(context: ContextTypes.DEFAULT_TYPE,
-                             telegram_id: int, lang: str) -> str | None:
-    """Одноразовая invite-ссылка в закрытый канал (RU или EN). Действует 1 час."""
+                             telegram_id: int, lang: str,
+                             ttl_seconds: int = 3600) -> str | None:
+    """Одноразовая invite-ссылка в закрытый канал (RU или EN).
+
+    По умолчанию живёт 1 час (сценарий сразу после оплаты). Онбординг просит
+    24 часа: человек часто открывает бота с телефона и возвращается позже.
+    """
     chat_id = COMMUNITY_EN_ID if (lang == "en" and COMMUNITY_EN_ID) else COMMUNITY_RU_ID
     try:
         try:
@@ -1051,7 +1066,7 @@ async def grant_paid_invite(context: ContextTypes.DEFAULT_TYPE,
         inv = await context.bot.create_chat_invite_link(
             chat_id,
             member_limit=1,
-            expire_date=int(datetime.now().timestamp()) + 3600,
+            expire_date=int(datetime.now().timestamp()) + ttl_seconds,
             name=f"tg:{telegram_id}",
         )
         return inv.invite_link
@@ -1762,6 +1777,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await run_gift7_flow(update, context, user.id, user.username,
                               lang=lang, source=source,
                               reply_target=update.message)
+        return
+
+    # Deep-link /start invite — reissue a working link to the closed group.
+    # The day-1 and day-2 onboarding messages point here. Before this branch
+    # existed the deep link fell through to the plain /start path, and because
+    # most trial profiles carry a technical @belfed.local email the bot asked
+    # for an email instead of handing over a link. Anyone with active access
+    # now gets a fresh single-use link immediately, valid 24 hours.
+    if args and args[0] in ("invite", "group"):
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        if not profile:
+            await update.message.reply_text(T(lang, "need_link"))
+            await send_main_menu(update, context, lang=lang)
+            return
+        if not has_access(profile):
+            await update.message.reply_text(T(lang, "invite_no_access"))
+            await send_main_menu(update, context, lang=lang)
+            return
+        link = await grant_paid_invite(context, user.id, lang, ttl_seconds=86400)
+        if link:
+            await update.message.reply_text(
+                T(lang, "trial_claim_already_active").format(invite=link),
+                disable_web_page_preview=True,
+            )
+        else:
+            await update.message.reply_text(T(lang, "paid_invite_fail"))
+        await send_main_menu(update, context, lang=lang)
         return
 
     # Deep-link /start request — jump straight into the asset-class picker
