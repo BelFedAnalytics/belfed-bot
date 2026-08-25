@@ -511,7 +511,8 @@ async def get_subscription(user_id: str) -> dict | None:
     rows = await sb_get(
         "/rest/v1/subscriptions",
         params={"user_id": f"eq.{user_id}",
-                "select": "status,plan_code,current_period_end,cancel_at_period_end,payment_method_id",
+                "select": "provider,status,plan_code,current_period_end,cancel_at_period_end,"
+                          "payment_method_id,provider_subscription_id",
                 "order": "current_period_end.desc.nullslast"},
     )
     if not rows:
@@ -520,6 +521,29 @@ async def get_subscription(user_id: str) -> dict | None:
         if r.get("status") == "active":
             return r
     return rows[0]
+
+
+def is_autorenew_enabled(subscription: dict | None) -> bool:
+    """Return whether the payment provider will renew an active subscription.
+
+    Tribute keeps the card and renewal state on its side, so its local
+    payment_method_id is normally null. The provider and cancellation flag are
+    therefore authoritative for Tribute, while YooKassa and Telegram Stars use
+    their provider-specific local identifiers.
+    """
+    if not subscription or subscription.get("status") != "active":
+        return False
+    if subscription.get("cancel_at_period_end"):
+        return False
+
+    provider = subscription.get("provider")
+    if provider == "tribute":
+        return True
+    if provider == "yookassa":
+        return bool(subscription.get("payment_method_id"))
+    if provider == "telegram_stars":
+        return bool(subscription.get("provider_subscription_id"))
+    return False
 
 # Canonicalises the ISO 8601 shapes Postgres/PostgREST actually emit before
 # handing them to datetime.fromisoformat(). Needed because fromisoformat() on
@@ -2070,9 +2094,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(profile):
         msg = "✅ Admin. Full access." if lang == "en" else "✅ Администратор. Доступ ко всем материалам без ограничений."
     elif sub and sub.get("status") == "active" and exp and exp > now:
-        has_pm = bool(sub.get("payment_method_id"))
         autorenew = (T(lang, "autorenew_on")
-                     if has_pm and not sub.get("cancel_at_period_end")
+                     if is_autorenew_enabled(sub)
                      else T(lang, "autorenew_off"))
         msg = T(lang, "status_active").format(until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
     elif plan == "trial" and exp and exp > now:
@@ -3222,9 +3245,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now = datetime.now(timezone.utc)
         plan = profile.get("subscription_plan")
         if sub and sub.get("status") == "active" and exp and exp > now:
-            has_pm = bool(sub.get("payment_method_id"))
             autorenew = (T(lang, "autorenew_on")
-                         if has_pm and not sub.get("cancel_at_period_end")
+                         if is_autorenew_enabled(sub)
                          else T(lang, "autorenew_off"))
             msg = T(lang, "status_active").format(until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
         elif plan == "trial" and exp and exp > now:
