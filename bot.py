@@ -654,11 +654,23 @@ TEXTS_RU = {
     "no_access":       ("Сначала зарегистрируйтесь на " + WEB_URL_RU + " и привяжите Telegram. "
                         "Получите 14 дней бесплатного доступа — без привязки карты."),
     "trial_claim_ok": (
-        "🎁 14 дней бесплатного доступа открыты.\n\n"
+        "🎁 14 дней полного доступа открыты.\n\n"
         "Ваша персональная ссылка в закрытый канал "
         "(одноразовая, действует 24 часа):\n{invite}\n\n"
+        "Чтобы вы понимали ритм сервиса, вот что происходит внутри:\n"
+        "• около 25 записей в Ленте в неделю: развитие трендов, потоки капитала, "
+        "мнения ведущих инвест-домов\n"
+        "• около 25 технических разборов активов в неделю: акции, криптовалюты, сырьё\n"
+        "• обзоры по секторам и макро: несколько раз в месяц\n"
+        "• оповещения о наших торговых сделках: в среднем 15-18 новых среднесрочных "
+        "позиций в месяц, вход, стоп, цели и результат в R видны в трекере\n"
+        "• ваши запросы на разбор актива: медиана ответа около 3 часов, почти все "
+        "закрываем в течение суток. Берём в работу инструменты, по которым видим "
+        "осмысленную техническую картину\n\n"
+        "Попробуйте прямо сегодня: отправьте тикер через кнопку «Запросить актив». "
+        "Это самый быстрый способ понять, подходит ли вам наша аналитика.\n\n"
         f"После триала: подписка {PRICE_RUB} ₽ / мес. "
-        "Email понадобится только при первой оплате — для чека."
+        "Email понадобится только при первой оплате, для чека."
     ),
     "trial_claim_already_active": (
         "✅ У вас уже есть активный доступ.\n\n"
@@ -843,11 +855,22 @@ TEXTS_EN = {
     "no_access":       ("Please sign up at " + WEB_URL_EN + " and link Telegram first. "
                         "Get 14 days of free access — no card required."),
     "trial_claim_ok": (
-        "🎁 14 days of free access unlocked.\n\n"
+        "🎁 14 days of full access unlocked.\n\n"
         "Your personal invite to the private channel "
         "(single-use, valid 24 hours):\n{invite}\n\n"
+        "So you know the rhythm of the service, here is what happens inside:\n"
+        "• around 25 entries in the Feed per week: how trends develop, where capital flows, "
+        "what leading investment houses are saying\n"
+        "• around 25 technical asset breakdowns per week: equities, crypto, commodities\n"
+        "• sector and macro reports: several times a month\n"
+        "• alerts on our trades: on average 15-18 new medium-term positions a month, "
+        "with entry, stop, targets and result in R visible in the tracker\n"
+        "• your own asset requests: median turnaround around 3 hours, almost all closed "
+        "within a day. We take on instruments where we see a meaningful technical picture\n\n"
+        "Try it today: send a ticker through the Request asset button. "
+        "It is the fastest way to tell whether our analysis suits you.\n\n"
         f"After the trial: ${PRICE_USD} / month. "
-        "Email only at first payment — for the receipt."
+        "Email only at first payment, for the receipt."
     ),
     "trial_claim_already_active": (
         "✅ You already have active access.\n\n"
