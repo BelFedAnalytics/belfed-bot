@@ -290,6 +290,13 @@ async def claim_trial_via_edge(telegram_id: int, username: str | None,
     }
     if intent_token:
         payload["intent_token"] = intent_token
+        # Forward the deep-link trial-intent token as an explicit attribution
+        # reference so bot-claim-trial can resolve web-origin attribution (e.g.
+        # Threads UTM captured on belfed.ru and stored server-side against this
+        # key). Named/direct trials (telegram_direct) carry no token, so no
+        # attribution_key is sent and attribution stays organic — the existing
+        # direct-trial contract is unchanged. The value is never logged.
+        payload["attribution_key"] = intent_token
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
