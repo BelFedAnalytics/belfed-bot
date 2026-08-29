@@ -59,6 +59,11 @@ _en_id = os.environ.get("TELEGRAM_COMMUNITY_EN_ID", "").strip()
 COMMUNITY_EN_ID      = int(_en_id) if _en_id else None
 WEB_URL_RU           = os.environ.get("BELFED_WEB_URL",    "https://belfed.ru").rstrip("/")
 WEB_URL_EN           = os.environ.get("BELFED_WEB_URL_EN", "https://belfed.com").rstrip("/")
+# Locale-specific privacy-policy links shown before any email collection.
+# Defaults are the live published pages (verified 2026-07): RU policy lives
+# under /ru/privacy.html on belfed.ru, EN policy under /privacy.html on belfed.com.
+PRIVACY_URL_RU       = os.environ.get("BELFED_PRIVACY_URL_RU", WEB_URL_RU + "/ru/privacy.html")
+PRIVACY_URL_EN       = os.environ.get("BELFED_PRIVACY_URL_EN", WEB_URL_EN + "/privacy.html")
 TRIBUTE_RU_URL       = os.environ.get("TRIBUTE_RU_URL", "https://t.me/tribute/app?startapp=sXHG")
 TRIBUTE_EN_URL       = os.environ.get("TRIBUTE_EN_URL", "https://t.me/tribute/app?startapp=sXIq")
 PRICE_RUB            = os.environ.get("PRICE_MONTHLY_RUB", "1500")
@@ -708,7 +713,10 @@ TEXTS_RU = {
     "lang_saved":      "✅ Язык: Русский",
     "ask_email": (
         "✉️ Укажите email для оплаты\n\n"
-        "На него придёт фискальный чек (требование 54-ФЗ).\n"
+        "🔒 Email нужен только для отправки фискального чека по этой оплате (54-ФЗ) "
+        "и сервисных сообщений о вашей подписке. Мы не используем его для рекламных "
+        "рассылок без вашего отдельного согласия.\n"
+        "Политика конфиденциальности: " + PRIVACY_URL_RU + "\n\n"
         "Отправьте email одним сообщением, например: ivan@example.com\n\n"
         "Чтобы отменить — нажмите /cancel_payment"
     ),
@@ -719,6 +727,9 @@ TEXTS_RU = {
         "✉️ Укажите ваш email\n\n"
         "Я свяжу этот Telegram с вашим профилем на сайте BelFed. "
         "Если у вас ещё нет профиля — он будет создан автоматически.\n\n"
+        "🔒 Email используется для создания и восстановления доступа к аккаунту и "
+        "сервисных уведомлений. Рекламные рассылки — только с вашего отдельного согласия.\n"
+        "Политика конфиденциальности: " + PRIVACY_URL_RU + "\n\n"
         "Отправьте email одним сообщением, например: ivan@example.com\n\n"
         "Чтобы пропустить — /skip"
     ),
@@ -928,7 +939,10 @@ TEXTS_EN = {
     "lang_saved":      "✅ Language: English",
     "ask_email": (
         "✉️ Please enter your email\n\n"
-        "We need it for the fiscal receipt (Russian tax law requirement).\n"
+        "🔒 We use it only to send the fiscal receipt for this payment (Russian tax law) "
+        "and service messages about your subscription. We won't use it for marketing "
+        "emails without your separate consent.\n"
+        "Privacy policy: " + PRIVACY_URL_EN + "\n\n"
         "Send your email in one message, e.g.: ivan@example.com\n\n"
         "To cancel — tap /cancel_payment"
     ),
@@ -939,6 +953,9 @@ TEXTS_EN = {
         "✉️ Please share your email\n\n"
         "I'll link this Telegram to your BelFed site profile. "
         "If you don't have one yet — it will be created automatically.\n\n"
+        "🔒 Your email is used to create and recover account access and for service "
+        "notifications. Marketing emails only with your separate consent.\n"
+        "Privacy policy: " + PRIVACY_URL_EN + "\n\n"
         "Send your email in a single message, e.g. ivan@example.com\n\n"
         "To skip — /skip"
     ),
@@ -1443,8 +1460,9 @@ async def start_payment_with_email(query_or_message, context: ContextTypes.DEFAU
 
     provider:
       'yookassa' — карта/SBP, нужен для фискального чека (54-ФЗ)
-      'stars'    — Telegram Stars, формально не нужен, но собираем для
-                   базы подписчиков (newsletter, win-back).
+      'stars'    — Telegram Stars, email для сервисных целей (личный кабинет,
+                   восстановление доступа, сервисные уведомления). НЕ маркетинг:
+                   рекламные рассылки требуют отдельного согласия (38-ФЗ ст.18).
     """
     existing_email = profile.get("email")
     if is_valid_email(existing_email):
@@ -1646,6 +1664,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "пришлите ваш email одним сообщением. Мы привяжем Telegram "
                     "к вашему профилю и сразу откроем founding-цену.\n"
                     "\n"
+                    "🔒 Email используется для привязки и восстановления доступа к аккаунту "
+                    "и сервисных уведомлений, не для рекламных рассылок без отдельного согласия.\n"
+                    "Политика конфиденциальности: " + PRIVACY_URL_RU + "\n"
+                    "\n"
                     "Если вы новый пользователь — нажмите «Пропустить»."
                 )
                 skip_label = "Пропустить — я новый пользователь"
@@ -1656,6 +1678,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "If you already have a BelFed account (signed up on the site) — "
                     "send your email in one message. We'll link your Telegram "
                     "to your existing profile and open the founding price immediately.\n"
+                    "\n"
+                    "🔒 Your email is used to link and recover account access and for service "
+                    "notifications, not for marketing emails without your separate consent.\n"
+                    "Privacy policy: " + PRIVACY_URL_EN + "\n"
                     "\n"
                     "If you're new here — tap Skip below."
                 )
@@ -3165,8 +3191,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T(lang, "email_invalid"))
         return
 
-    # Сохраняем email в БД — триггер profiles_auto_opt_in_email автоматически
-    # добавит его в email_subscribers (при активной подписке).
+    # Сохраняем email в БД. Это email для фискального чека и сервисных уведомлений
+    # (см. текст ask_email) — НЕ маркетинговое согласие.
+    # COMPLIANCE DEPENDENCY: серверный триггер profiles_auto_opt_in_email при активной
+    # подписке автоматически добавляет этот email в email_subscribers. Пока триггер не
+    # снят/не поставлен за отдельный маркетинговый флаг на стороне БД (миграция вне
+    # scope этого PR), рекламные/newsletter/win-back рассылки должны оставаться
+    # отключёнными — иначе сервисный email молча превращается в рекламное согласие
+    # (152-ФЗ ст.9, 38-ФЗ ст.18). Бот отдельного маркетингового opt-in здесь не выставляет.
     profile_id = state["profile_id"]
     await update_profile_email(profile_id, text)
 
@@ -3447,7 +3479,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not profile:
             await query.message.reply_text(T(lang, "pay_no_profile"))
             return
-        # Собираем email для базы подписчиков (newsletter, win-back, transactional).
+        # email — для сервисных целей (чек, доступ, сервисные уведомления);
+        # маркетинговые рассылки только по отдельному согласию (38-ФЗ ст.18).
         await start_payment_with_email(query.message, context, profile, lang,
                                        provider="stars", telegram_id=user.id)
         return
@@ -3740,13 +3773,17 @@ async def on_successful_payment(update: Update, context: ContextTypes.DEFAULT_TY
                 if lang == "ru":
                     upgrade_txt = (
                         "✉️ Пожалуйста, укажите ваш email — это нужно для работы с личным кабинетом, "
-                        "восстановления доступа и важных сервисных уведомлений. Ссылка действует 24 часа."
+                        "восстановления доступа и важных сервисных уведомлений. Мы не используем его "
+                        "для рекламных рассылок без вашего отдельного согласия. Ссылка действует 24 часа.\n"
+                        "Политика конфиденциальности: " + PRIVACY_URL_RU
                     )
                     upgrade_btn = "✉️ Добавить email"
                 else:
                     upgrade_txt = (
                         "✉️ Please add your email — it’s required for member-dashboard recovery "
-                        "and important service notifications. Link valid 24 hours, no marketing spam."
+                        "and important service notifications. We won't use it for marketing emails "
+                        "without your separate consent. Link valid 24 hours.\n"
+                        "Privacy policy: " + PRIVACY_URL_EN
                     )
                     upgrade_btn = "✉️ Add email"
                 await msg.reply_text(
