@@ -2255,6 +2255,74 @@ async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True,
     )
 
+# ---------- /digest -- service recap on demand ----------
+BOT_DIGEST_URL = os.environ.get(
+    "BOT_DIGEST_URL",
+    f"{SUPABASE_URL}/functions/v1/bot-digest",
+)
+_DIGEST_WEEK_ARGS = {"week", "w", "7d", "неделя", "неделю"}
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/digest — сводка по сервису за сегодня, /digest week — за 7 дней.
+
+    Язык, проверка доступа (active / trial / admin) и сам текст решаются на
+    стороне edge-функции bot-digest и RPC build_digest_for_telegram. Бот только
+    передаёт telegram_id и тип периода, сообщение пользователю отправляет
+    функция, поэтому при успехе бот молчит.
+    """
+    if update.effective_chat.type != "private":
+        return
+
+    user = update.effective_user
+    arg = (context.args[0].lower() if context.args else "day")
+    kind = "week" if arg in _DIGEST_WEEK_ARGS else "day"
+
+    async def _fallback(text_ru: str, text_en: str):
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        await update.message.reply_text(text_en if lang == "en" else text_ru)
+
+    if not BOT_SHARED_SECRET:
+        log.error("digest: BOT_SHARED_SECRET not configured")
+        await _fallback(
+            "⚠️ Сводка временно недоступна. Попробуйте позже.",
+            "⚠️ The recap is temporarily unavailable. Please try again later.",
+        )
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                BOT_DIGEST_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-bot-secret": BOT_SHARED_SECRET,
+                    "apikey": SUPABASE_SERVICE_KEY,
+                },
+                json={"telegram_id": str(user.id), "kind": kind},
+            )
+        try:
+            d = r.json()
+        except Exception:
+            d = {"error": "bad_json", "raw": r.text[:200]}
+    except Exception as e:
+        log.exception("digest: edge fn call failed")
+        d = {"error": str(e)}
+        r = None
+
+    if r is not None and r.status_code == 200 and d.get("ok"):
+        log.info("digest sent tg=%s kind=%s status=%s lang=%s msg=%s",
+                 user.id, kind, d.get("status"), d.get("lang"), d.get("message_id"))
+        return
+
+    log.warning("digest failed tg=%s kind=%s http=%s payload=%s",
+                user.id, kind, getattr(r, "status_code", None), d)
+    await _fallback(
+        "⚠️ Не удалось собрать сводку. Попробуйте позже.",
+        "⚠️ Could not build the recap. Please try again later.",
+    )
+
 # ---------- /request <TICKER> -- chart-request submission from Telegram ----------
 TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
 
@@ -3889,6 +3957,7 @@ async def _set_bot_commands(application: Application):
         ru_cmds = [
             BotCommand("start",     "Меню и приветствие"),
             BotCommand("request",   "Запросить анализ актива"),
+            BotCommand("digest",    "Сводка по сервису"),
             BotCommand("status",    "Моя подписка"),
             BotCommand("dashboard", "Открыть дашборд"),
             BotCommand("support",   "Написать в поддержку"),
@@ -3898,6 +3967,7 @@ async def _set_bot_commands(application: Application):
         en_cmds = [
             BotCommand("start",     "Menu and welcome"),
             BotCommand("request",   "Request asset analysis"),
+            BotCommand("digest",    "Service recap"),
             BotCommand("status",    "My subscription"),
             BotCommand("dashboard", "Open dashboard"),
             BotCommand("support",   "Contact support"),
@@ -3926,6 +3996,7 @@ def main():
     app.add_handler(CommandHandler("lang",           cmd_lang))
     app.add_handler(CommandHandler("dashboard",      cmd_dashboard))
     app.add_handler(CommandHandler("request",        cmd_request))
+    app.add_handler(CommandHandler("digest",         cmd_digest))
     app.add_handler(CommandHandler("payments",       cmd_payments))
     app.add_handler(CommandHandler("subscribers",    cmd_subscribers))
     app.add_handler(CommandHandler("reply",          cmd_reply))
