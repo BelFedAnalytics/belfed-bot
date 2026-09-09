@@ -2361,6 +2361,79 @@ async def send_digest(user_id: int, kind: str, reply_target, lang_hint=None):
     )
 
 
+# Автоматическая недельная сводка: рассылку делает edge-функция
+# digest-weekly-broadcast по расписанию (воскресенье, 12:00 Москва для ru и
+# 18:00 Лондон для en), а бот отвечает только за отказ и
+# возврат подписки на неё. Флаг живёт в profiles.weekly_digest_opt_out.
+_WEEKLY_OPT_COPY = {
+    "ru": {
+        "off": "Готово. Автоматическую недельную сводку больше не пришлём. "
+               "Вызвать её в любой момент можно командой /digest, "
+               "а вернуть автоотправку — командой /digest_on.",
+        "on": "Готово. Недельная сводка снова будет приходить по воскресеньям в 12:00 по Москве. "
+              "Отключить — /digest_off.",
+        "fail": "⚠️ Не удалось сохранить настройку. Попробуйте позже.",
+        "not_linked": "Профиль не найден. Нажмите /start, чтобы начать.",
+    },
+    "en": {
+        "off": "Done. The automatic weekly recap is off. "
+               "You can still pull it any time with /digest, "
+               "and turn the automatic delivery back on with /digest_on.",
+        "on": "Done. The weekly recap will arrive again on Sundays at 18:00 London time. "
+              "To turn it off use /digest_off.",
+        "fail": "⚠️ Could not save the setting. Please try again later.",
+        "not_linked": "No profile found. Tap /start to begin.",
+    },
+}
+
+
+async def set_weekly_digest_opt_out_via_rpc(telegram_id: int,
+                                            opt_out: bool) -> dict | None:
+    """Вызывает RPC weekly_digest_set_opt_out. Возвращает jsonb или None."""
+    status, data = await sb_post(
+        "/rest/v1/rpc/weekly_digest_set_opt_out",
+        {"p_telegram_id": str(telegram_id), "p_opt_out": bool(opt_out)},
+    )
+    if status not in (200, 204):
+        log.error("weekly_digest_set_opt_out RPC failed: %s %s", status, data)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def _apply_weekly_opt_out(update: Update, reply_target, user,
+                                opt_out: bool, lang_hint=None):
+    lang = lang_hint
+    if lang is None:
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+    c = _WEEKLY_OPT_COPY["en" if lang == "en" else "ru"]
+
+    res = await set_weekly_digest_opt_out_via_rpc(user.id, opt_out)
+    if res is None:
+        await reply_target.reply_text(c["fail"])
+        return
+    if res.get("status") == "not_linked":
+        await reply_target.reply_text(c["not_linked"])
+        return
+
+    log.info("weekly digest opt_out=%s tg=%s", opt_out, user.id)
+    await reply_target.reply_text(c["off"] if opt_out else c["on"])
+
+
+async def cmd_digest_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/digest_off — отключить автоматическую недельную сводку."""
+    if update.effective_chat.type != "private":
+        return
+    await _apply_weekly_opt_out(update, update.message, update.effective_user, True)
+
+
+async def cmd_digest_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/digest_on — вернуть автоматическую недельную сводку."""
+    if update.effective_chat.type != "private":
+        return
+    await _apply_weekly_opt_out(update, update.message, update.effective_user, False)
+
+
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/digest — выбор периода кнопками, /digest week|вчера — сразу период."""
     if update.effective_chat.type != "private":
@@ -3320,6 +3393,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Сообщение-вопрос убираем, чтобы в чате оставалась только сводка; ряд
     # кнопок к новой сводке добавляет edge-функция, так что выбор остаётся
     # доступным без повторного ввода команды.
+    # Кнопка отказа под автоматической недельной сводкой. Проверяется до
+    # разбора периода, иначе weekly_off был бы принят за неизвестный период.
+    if data in ("digest:weekly_off", "digest:weekly_on"):
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await _apply_weekly_opt_out(
+            update, query.message, user,
+            data.endswith("weekly_off"), lang_hint=lang)
+        return
+
     if data.startswith("digest:"):
         kind = data.split(":", 1)[1]
         if kind not in ("day", "yesterday", "week"):
@@ -4076,6 +4163,8 @@ def main():
     app.add_handler(CommandHandler("dashboard",      cmd_dashboard))
     app.add_handler(CommandHandler("request",        cmd_request))
     app.add_handler(CommandHandler("digest",         cmd_digest))
+    app.add_handler(CommandHandler("digest_off",     cmd_digest_off))
+    app.add_handler(CommandHandler("digest_on",      cmd_digest_on))
     app.add_handler(CommandHandler("payments",       cmd_payments))
     app.add_handler(CommandHandler("subscribers",    cmd_subscribers))
     app.add_handler(CommandHandler("reply",          cmd_reply))
