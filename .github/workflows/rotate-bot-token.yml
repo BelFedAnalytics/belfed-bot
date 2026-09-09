@@ -1,0 +1,52 @@
+name: Rotate bot token on VPS
+
+# Manual only. Reads the new Telegram bot token from the repository secret
+# TELEGRAM_BOT_TOKEN, writes it into /etc/belfedbot.env on the VPS and restarts
+# belfedbot. The token is passed to the VPS on stdin and is masked by Actions,
+# so it never appears in argv or in the workflow log. On any failure the remote
+# script restores the previous env file.
+#
+# After a successful run, delete the TELEGRAM_BOT_TOKEN repository secret: it is
+# only needed for the rotation itself, the running bot reads it from the env file.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  rotate:
+    name: write token + restart belfedbot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -t rsa,ecdsa,ed25519 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Rotate token
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          NEW_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$NEW_TOKEN" ]; then
+            echo "::error::repository secret TELEGRAM_BOT_TOKEN is not set"
+            exit 1
+          fi
+          scp -i ~/.ssh/deploy_key -o BatchMode=yes \
+            scripts/rotate_bot_token.sh "$VPS_USER@$VPS_HOST:/tmp/rotate_bot_token.sh"
+          printf '%s\n' "$NEW_TOKEN" | ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" 'bash /tmp/rotate_bot_token.sh; rc=$?; rm -f /tmp/rotate_bot_token.sh; exit $rc'
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

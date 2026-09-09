@@ -95,6 +95,12 @@ TELEGRAM_API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# httpx логирует полный URL каждого запроса, а в URL Telegram Bot API всегда
+# стоит токен бота. На INFO это кладёт токен в journald и дальше в любой
+# дамп логов, включая логи CI. Ошибки запросов остаются видны: их пишет
+# сам бот и telegram.ext.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("belfed-bot")
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")

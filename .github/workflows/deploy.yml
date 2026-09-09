@@ -57,6 +57,18 @@ jobs:
           SERVICE=belfedbot
           cd /home/belfed || { echo "::error::/home/belfed missing"; exit 1; }
 
+          # Never print raw service logs: httpx-style lines carry the bot token
+          # inside the Telegram API URL, and CI logs are readable by anyone with
+          # access to the repository. svc_logs() is the only sanctioned way to
+          # surface journald output from here.
+          svc_logs() {
+            journalctl -u "$SERVICE" -n "${1:-15}" --no-pager 2>&1 | sed -E \
+              -e 's#/bot[0-9]{5,}:[A-Za-z0-9_-]{20,}#/bot<redacted-token>#g' \
+              -e 's#[0-9]{5,}:AA[A-Za-z0-9_-]{20,}#<redacted-token>#g' \
+              -e 's#eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}#<redacted-jwt>#g' \
+              -e 's#(apikey|x-bot-secret|Authorization|Bearer)([=: ]+)[^ "'"'"']+#\1\2<redacted>#gI'
+          }
+
           # NRestarts can come back empty on some systemd versions; a bare
           # `[ "$x" -gt ... ]` on an empty string is a hard shell error, so
           # normalise to an integer here rather than at each comparison.
@@ -86,7 +98,7 @@ jobs:
               echo "rollback OK — $SERVICE is active on $(git rev-parse --short HEAD)"
             else
               echo "::error::ROLLBACK FAILED — $SERVICE is DOWN and needs manual attention"
-              journalctl -u "$SERVICE" -n 50 --no-pager >&2
+              svc_logs 50 >&2
             fi
           }
 
@@ -122,7 +134,7 @@ jobs:
           sleep 5
           if ! systemctl is-active --quiet "$SERVICE"; then
             echo "::error::$SERVICE not active 5s after restart"
-            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            svc_logs 50 >&2
             rollback "service not active after restart"
             exit 1
           fi
@@ -133,7 +145,7 @@ jobs:
           sleep 10
           if ! systemctl is-active --quiet "$SERVICE"; then
             echo "::error::$SERVICE died within 15s of starting"
-            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            svc_logs 50 >&2
             rollback "service died during settle window"
             exit 1
           fi
@@ -142,7 +154,7 @@ jobs:
           echo "NRestarts after: $NEW_RESTARTS"
           if [ "$NEW_RESTARTS" -gt "$((PREV_RESTARTS + 1))" ]; then
             echo "::error::NRestarts jumped $PREV_RESTARTS -> $NEW_RESTARTS: crash loop"
-            journalctl -u "$SERVICE" -n 50 --no-pager >&2
+            svc_logs 50 >&2
             rollback "crash loop detected via NRestarts"
             exit 1
           fi
@@ -155,7 +167,7 @@ jobs:
           fi
 
           echo "$SERVICE is active on $NEW_SHA"
-          journalctl -u "$SERVICE" -n 15 --no-pager
+          svc_logs 15
           REMOTE
 
       - name: Verify deployed commit matches this workflow run
