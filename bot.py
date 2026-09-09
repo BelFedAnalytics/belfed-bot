@@ -2266,28 +2266,58 @@ BOT_DIGEST_URL = os.environ.get(
     "BOT_DIGEST_URL",
     f"{SUPABASE_URL}/functions/v1/bot-digest",
 )
-_DIGEST_WEEK_ARGS = {"week", "w", "7d", "неделя", "неделю"}
+_DIGEST_WEEK_ARGS      = {"week", "w", "7d", "неделя", "неделю", "за неделю"}
+_DIGEST_YESTERDAY_ARGS = {"yesterday", "yest", "y", "вчера", "за вчера"}
+_DIGEST_TODAY_ARGS     = {"today", "day", "d", "сегодня", "за сегодня"}
+
+# Тексты кнопок выбора периода дублируют COPY в edge-функции bot-digest:
+# первое меню рисует бот, а под готовой сводкой ряд кнопок добавляет функция.
+_DIGEST_PICK = {
+    "ru": {"day": "Сегодня", "yesterday": "Вчера", "week": "За неделю",
+           "prompt": "За какой период собрать сводку?"},
+    "en": {"day": "Today", "yesterday": "Yesterday", "week": "Past week",
+           "prompt": "Which period should the recap cover?"},
+}
 
 
-async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/digest — сводка по сервису за сегодня, /digest week — за 7 дней.
+def _digest_kind_from_arg(arg: str) -> str | None:
+    """Явный период из аргумента команды, либо None → показать выбор."""
+    a = (arg or "").strip().lower()
+    if not a:
+        return None
+    if a in _DIGEST_WEEK_ARGS:
+        return "week"
+    if a in _DIGEST_YESTERDAY_ARGS:
+        return "yesterday"
+    if a in _DIGEST_TODAY_ARGS:
+        return "day"
+    return "day"
+
+
+def _digest_picker_markup(lang: str) -> InlineKeyboardMarkup:
+    c = _DIGEST_PICK["en" if lang == "en" else "ru"]
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(c["day"],       callback_data="digest:day"),
+        InlineKeyboardButton(c["yesterday"], callback_data="digest:yesterday"),
+        InlineKeyboardButton(c["week"],      callback_data="digest:week"),
+    ]])
+
+
+async def send_digest(user_id: int, kind: str, reply_target, lang_hint=None):
+    """Просит edge-функцию bot-digest собрать и отправить сводку.
 
     Язык, проверка доступа (active / trial / admin) и сам текст решаются на
-    стороне edge-функции bot-digest и RPC build_digest_for_telegram. Бот только
-    передаёт telegram_id и тип периода, сообщение пользователю отправляет
-    функция, поэтому при успехе бот молчит.
+    стороне функции и RPC build_digest_for_telegram. Бот передаёт telegram_id,
+    период и with_picker, сообщение отправляет функция, поэтому при успехе бот
+    молчит. reply_target нужен только для сообщения об ошибке.
     """
-    if update.effective_chat.type != "private":
-        return
-
-    user = update.effective_user
-    arg = (context.args[0].lower() if context.args else "day")
-    kind = "week" if arg in _DIGEST_WEEK_ARGS else "day"
 
     async def _fallback(text_ru: str, text_en: str):
-        profile = await get_profile_by_telegram(user.id)
-        lang = await get_user_lang(update, profile)
-        await update.message.reply_text(text_en if lang == "en" else text_ru)
+        lang = lang_hint
+        if lang is None:
+            profile = await get_profile_by_telegram(user_id)
+            lang = (profile or {}).get("lang") or "ru"
+        await reply_target.reply_text(text_en if lang == "en" else text_ru)
 
     if not BOT_SHARED_SECRET:
         log.error("digest: BOT_SHARED_SECRET not configured")
@@ -2306,7 +2336,8 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "x-bot-secret": BOT_SHARED_SECRET,
                     "apikey": SUPABASE_SERVICE_KEY,
                 },
-                json={"telegram_id": str(user.id), "kind": kind},
+                json={"telegram_id": str(user_id), "kind": kind,
+                      "with_picker": True},
             )
         try:
             d = r.json()
@@ -2319,15 +2350,34 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if r is not None and r.status_code == 200 and d.get("ok"):
         log.info("digest sent tg=%s kind=%s status=%s lang=%s msg=%s",
-                 user.id, kind, d.get("status"), d.get("lang"), d.get("message_id"))
+                 user_id, kind, d.get("status"), d.get("lang"), d.get("message_id"))
         return
 
     log.warning("digest failed tg=%s kind=%s http=%s payload=%s",
-                user.id, kind, getattr(r, "status_code", None), d)
+                user_id, kind, getattr(r, "status_code", None), d)
     await _fallback(
         "⚠️ Не удалось собрать сводку. Попробуйте позже.",
         "⚠️ Could not build the recap. Please try again later.",
     )
+
+
+async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/digest — выбор периода кнопками, /digest week|вчера — сразу период."""
+    if update.effective_chat.type != "private":
+        return
+
+    user = update.effective_user
+    kind = _digest_kind_from_arg(context.args[0] if context.args else "")
+
+    if kind is None:
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        c = _DIGEST_PICK["en" if lang == "en" else "ru"]
+        await update.message.reply_text(
+            c["prompt"], reply_markup=_digest_picker_markup(lang))
+        return
+
+    await send_digest(user.id, kind, update.message)
 
 # ---------- /request <TICKER> -- chart-request submission from Telegram ----------
 TICKER_RE = re.compile(r"^[A-Z0-9]{1,8}$")
@@ -3265,6 +3315,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = query.from_user
     data = query.data or ""
+
+    # Выбор периода сводки: кнопки под меню /digest и под самой сводкой.
+    # Сообщение-вопрос убираем, чтобы в чате оставалась только сводка; ряд
+    # кнопок к новой сводке добавляет edge-функция, так что выбор остаётся
+    # доступным без повторного ввода команды.
+    if data.startswith("digest:"):
+        kind = data.split(":", 1)[1]
+        if kind not in ("day", "yesterday", "week"):
+            kind = "day"
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        target = query.message
+        try:
+            await query.message.delete()
+        except Exception:
+            # Сообщение старше 48 часов удалить нельзя — тогда просто снимаем
+            # кнопки, чтобы не остался висящий выбор.
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        await send_digest(user.id, kind, target, lang_hint=lang)
+        return
 
     # Founding flow: пользователь нажал Skip (он новый, не сайт-подписчик)
     if data.startswith("founding_skip|"):
