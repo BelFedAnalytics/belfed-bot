@@ -138,3 +138,43 @@ def test_stripping_a_survey_only_keyboard_returns_none():
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("go", callback_data="sv:start:fm0")]])
     assert surveys.letter_keyboard_without_survey(kb) is None
     assert surveys.letter_keyboard_without_survey(None) is None
+
+
+def test_first_question_allows_up_to_three_options():
+    q1 = surveys.WAVES["fm0"]["questions"][0]
+    assert q1["max_pick"] == 3
+    assert len(q1["options"]) >= 3
+
+
+def test_final_screen_offers_the_edit_button():
+    for wave in surveys.WAVES:
+        for lang in ("ru", "en"):
+            kb = surveys._final_keyboard(wave, lang)
+            datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+            assert datas == [f"sv:{wave}:_edit:menu"]
+
+
+def test_edit_menu_lists_every_question_and_a_way_back():
+    for wave, spec in surveys.WAVES.items():
+        kb = surveys._edit_menu_keyboard(wave, "en")
+        datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+        for q in spec["questions"]:
+            assert f"sv:{wave}:_edit:{q['key']}" in datas
+        assert datas[-1] == f"sv:{wave}:_edit:_back"
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        assert all(len(l) <= 48 for l in labels), labels
+
+
+def test_edit_callbacks_never_collide_with_question_keys():
+    for wave in surveys.WAVES:
+        assert surveys._q_index(wave, "_edit") == -1
+
+
+def test_answer_labels_render_single_and_multi_answers():
+    q1 = surveys.WAVES["fm0"]["questions"][0]
+    q2 = surveys.WAVES["fm0"]["questions"][1]
+    multi = surveys._answer_labels(q1, {"q1": ["analytics", "trades"]}, "en")
+    assert multi == "Market Analytics and Reviews, Trade Operations"
+    single = surveys._answer_labels(q2, {"q2": "tradingview"}, "en")
+    assert single and single != "-"
+    assert surveys._answer_labels(q2, {}, "en") == "-"

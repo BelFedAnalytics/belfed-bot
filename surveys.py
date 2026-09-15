@@ -61,7 +61,7 @@ WAVES: dict[str, dict[str, Any]] = {
         },
         "questions": [
             {
-                "key": "q1", "max_pick": 2,
+                "key": "q1", "max_pick": 3,
                 "text": {
                     "ru": "Какая часть сервиса убедила вас оформить подписку?",
                     "en": "Which part of the service made you decide to subscribe?",
@@ -199,6 +199,13 @@ SCALE_LABELS = {
     "en": {"1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "skip": "Did not use"},
 }
 DONE_LABEL = {"ru": "Готово", "en": "Done"}
+EDIT_LABEL = {"ru": "⚙️ Исправить ответ", "en": "⚙️ Change an answer"}
+EDIT_MENU = {
+    "ru": "Какой ответ поправить?",
+    "en": "Which answer would you like to change?",
+}
+BACK_LABEL = {"ru": "← Назад", "en": "← Back"}
+UPDATED_TOAST = {"ru": "Ответ обновлён", "en": "Answer updated"}
 NOTHING_PICKED = {"ru": "Сначала выберите вариант", "en": "Pick an option first"}
 SAVED_TOAST = {"ru": "Записал, спасибо", "en": "Saved, thank you"}
 
@@ -277,10 +284,33 @@ async def save_answers(row_id: int, answers: dict, completed: bool = False) -> b
     return res is not None
 
 
-async def save_open_answer(row_id: int, text: str) -> bool:
+async def mark_completed(row_id: int) -> bool:
+    """Ставит completed_at, только если он ещё пуст. False значит, что опрос
+    был завершён раньше: повторное уведомление админам посылать не надо.
+    Защита от двойной обработки одного и того же нажатия."""
+    rows = await _sb("PATCH", "member_surveys",
+                     params={"id": f"eq.{row_id}", "completed_at": "is.null"},
+                     body={"completed_at": datetime.now(timezone.utc).isoformat()},
+                     prefer="return=representation")
+    return bool(rows)
+
+
+async def save_open_answer(row_id: int, text: str) -> str:
+    """Возвращает new для первого ответа, updated при замене, same если текст
+    тот же самый. Последнее гасит повторные уведомления админам."""
+    body = {"open_answer": text[:2000]}
+    rows = await _sb("PATCH", "member_surveys",
+                     params={"id": f"eq.{row_id}", "open_answer": "is.null"},
+                     body=body, prefer="return=representation")
+    if rows:
+        return "new"
+    current = await _sb("GET", "member_surveys", params={
+        "id": f"eq.{row_id}", "select": "open_answer"})
+    if current and (current[0].get("open_answer") or "") == body["open_answer"]:
+        return "same"
     res = await _sb("PATCH", "member_surveys", params={"id": f"eq.{row_id}"},
-                    body={"open_answer": text[:2000]}, prefer="return=minimal")
-    return res is not None
+                    body=body, prefer="return=minimal")
+    return "updated" if res is not None else "error"
 
 
 async def pending_open_answer(telegram_id: int) -> dict | None:
@@ -328,6 +358,34 @@ def _keyboard(wave: str, q: dict, lang: str, picked: list[str]) -> InlineKeyboar
         rows.append([InlineKeyboardButton(DONE_LABEL[lang],
                                           callback_data=f"sv:{wave}:{q['key']}:_done")])
     return InlineKeyboardMarkup(rows)
+
+
+def _final_keyboard(wave: str, lang: str) -> InlineKeyboardMarkup:
+    """На финальном экране остаётся одна кнопка: поправить ответ, если
+    человек нажал не то."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(EDIT_LABEL[lang], callback_data=f"sv:{wave}:_edit:menu")]])
+
+
+def _edit_menu_keyboard(wave: str, lang: str) -> InlineKeyboardMarkup:
+    rows = []
+    for i, q in enumerate(WAVES[wave]["questions"]):
+        label = f"{i + 1}. {_short_label(q, lang)}"
+        rows.append([InlineKeyboardButton(label,
+                                         callback_data=f"sv:{wave}:_edit:{q['key']}")])
+    rows.append([InlineKeyboardButton(BACK_LABEL[lang],
+                                      callback_data=f"sv:{wave}:_edit:_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _short_label(q: dict, lang: str, limit: int = 40) -> str:
+    text = q.get("short", {}).get(lang) if isinstance(q.get("short"), dict) else None
+    if not text:
+        text = q["text"][lang]
+    text = text.rstrip("?.").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1].rstrip() + "…"
 
 
 def _question_text(wave: str, idx: int, lang: str, first: bool) -> str:
@@ -425,12 +483,43 @@ async def maybe_handle_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if lang not in ("ru", "en"):
         lang = "ru"
 
+    answers = dict(row.get("answers") or {})
+
+    # Исправление ответа после финального экрана: sv:<wave>:_edit:<menu|_back|qkey>
+    if qkey == "_edit":
+        await query.answer()
+        if code == "menu":
+            try:
+                await query.edit_message_text(EDIT_MENU[lang],
+                                              reply_markup=_edit_menu_keyboard(wave, lang))
+            except Exception:
+                pass
+            return True
+        if code == "_back":
+            context.user_data.pop("survey_edit", None)
+            await _show_final(query, wave, lang)
+            return True
+        eidx = _q_index(wave, code)
+        if eidx < 0:
+            return True
+        eq = WAVES[wave]["questions"][eidx]
+        context.user_data["survey_edit"] = {"row_id": row["id"], "qkey": eq["key"]}
+        try:
+            await query.edit_message_text(
+                _question_text(wave, eidx, lang, first=False),
+                reply_markup=_keyboard(wave, eq, lang, list(answers.get(eq["key"]) or [])),
+            )
+        except Exception:
+            pass
+        return True
+
     idx = _q_index(wave, qkey)
     if idx < 0:
         await query.answer()
         return True
     q = WAVES[wave]["questions"][idx]
-    answers = dict(row.get("answers") or {})
+    editing = context.user_data.get("survey_edit") or {}
+    is_edit = editing.get("row_id") == row["id"] and editing.get("qkey") == qkey
 
     # Мультивыбор: нажатие переключает вариант, «Готово» переходит дальше.
     if q["max_pick"] > 1:
@@ -462,17 +551,25 @@ async def maybe_handle_callback(update: Update, context: ContextTypes.DEFAULT_TY
         answers[qkey] = code
         await query.answer()
 
+    # Режим правки: сохраняем и возвращаемся на финальный экран, а не идём
+    # к следующему вопросу.
+    if is_edit:
+        await save_answers(row["id"], answers)
+        context.user_data.pop("survey_edit", None)
+        await _show_final(query, wave, lang)
+        await _notify_admins_update(context, query.from_user, wave, q, answers, lang)
+        return True
+
     is_last = idx == len(WAVES[wave]["questions"]) - 1
-    await save_answers(row["id"], answers, completed=is_last)
+    await save_answers(row["id"], answers)
 
     if is_last:
-        try:
-            await query.edit_message_text(WAVES[wave]["final"][lang], reply_markup=None)
-        except Exception:
-            pass
+        first_time = await mark_completed(row["id"])
+        await _show_final(query, wave, lang)
         # Ждём необязательный свободный ответ следующим сообщением.
         context.user_data["awaiting_survey_open"] = {"row_id": row["id"], "lang": lang}
-        await _notify_admins_complete(context, query.from_user, wave, answers, lang)
+        if first_time:
+            await _notify_admins_complete(context, query.from_user, wave, answers, lang)
         return True
 
     nxt = WAVES[wave]["questions"][idx + 1]
@@ -504,20 +601,54 @@ async def maybe_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not row_id:
         return False
 
-    await save_open_answer(row_id, text)
-    context.user_data.pop("awaiting_survey_open", None)
+    outcome = await save_open_answer(row_id, text)
+    if outcome == "same":
+        return True
+    # Состояние оставляем: если человек напишет ещё раз, текст заменит прежний.
+    context.user_data["awaiting_survey_open"] = {"row_id": row_id, "lang": lang}
     await msg.reply_text("Спасибо, записал." if lang == "ru" else "Thank you, noted.")
+    head = "📝 Survey open answer" if outcome == "new" else "✏️ Survey open answer updated"
     for admin_id in ADMIN_TELEGRAM_IDS:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
-                text=("📝 Survey open answer\n"
+                text=(f"{head}\n"
                       f"tg={update.effective_user.id} "
                       f"@{update.effective_user.username or '-'}\n\n{text[:1500]}"),
             )
         except Exception:
             pass
     return True
+
+
+async def _show_final(query, wave: str, lang: str) -> None:
+    try:
+        await query.edit_message_text(WAVES[wave]["final"][lang],
+                                     reply_markup=_final_keyboard(wave, lang))
+    except Exception:
+        pass
+
+
+def _answer_labels(q: dict, answers: dict, lang: str) -> str:
+    val = answers.get(q["key"])
+    if val is None:
+        return "-"
+    labels = dict(_options_for(q, lang))
+    if isinstance(val, list):
+        return ", ".join(labels.get(v, v) for v in val)
+    return labels.get(val, val)
+
+
+async def _notify_admins_update(context, user, wave: str, q: dict,
+                                answers: dict, lang: str) -> None:
+    body = (f"✏️ Survey {wave} answer updated\n"
+            f"tg={user.id} @{user.username or '-'}\n"
+            f"{q['key']}: {_answer_labels(q, answers, lang)}")
+    for admin_id in ADMIN_TELEGRAM_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=body)
+        except Exception:
+            pass
 
 
 async def _notify_admins_complete(context, user, wave: str, answers: dict, lang: str) -> None:
