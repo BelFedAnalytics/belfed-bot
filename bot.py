@@ -41,6 +41,7 @@ from telegram.ext import (
 )
 
 import positions  # type: ignore  # local module — see positions.py
+import surveys    # type: ignore  # local module — see surveys.py
 from link_token import looks_like_link_token  # local module — see link_token.py
 from ad_attribution import (  # local module — see ad_attribution.py
     is_ad_payload,
@@ -1833,6 +1834,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Deep-link /start sv_fm0 / sv_fm7 — вход в микро-опрос из письма на email.
+    if args and args[0].startswith("sv_"):
+        wave = args[0][3:]
+        profile = await get_profile_by_telegram(user.id)
+        lang = await get_user_lang(update, profile)
+        if not profile or wave not in surveys.WAVES:
+            await update.message.reply_text(T(lang, "freetext_fallback"))
+            return
+        row = await surveys.get_row(profile["id"], wave)
+        if row and row.get("completed_at"):
+            await update.message.reply_text(
+                "Опрос уже пройден, спасибо." if lang == "ru"
+                else "You have already completed this survey, thank you.")
+            return
+        if row and row.get("lang"):
+            lang = (row["lang"] or lang).lower()
+        await surveys.send_wave(context.bot, user.id, profile["id"], wave, lang,
+                                sent_by="deeplink")
+        return
+
     # Deep-link /start support — jump straight into the feedback flow
     if args and args[0] in ("support", "feedback"):
         profile = await get_profile_by_telegram(user.id)
@@ -3340,6 +3361,10 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = context.user_data.get("awaiting_email_for_payment")
     if not state:
+        # Свободный ответ после финального экрана микро-опроса: пишем его в
+        # member_surveys вместо подсказки про /support.
+        if await surveys.maybe_handle_text(update, context):
+            return
         # No active state: user just typed something. Don't stay silent —
         # give a friendly hint how to reach support / open the menu.
         try:
@@ -3382,6 +3407,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Positions module callbacks (positions:*) handled separately
     if (query.data or "").startswith("positions:"):
         await positions.maybe_handle_callback(update, context)
+        return
+    # Микро-опросы участников (sv:*) — отдельный модуль, свой ответ на query.
+    if (query.data or "").startswith("sv:"):
+        await surveys.maybe_handle_callback(update, context)
         return
     await query.answer()
     user = query.from_user
@@ -4170,6 +4199,10 @@ def main():
     # Positions management commands (admin-only) — must register BEFORE the
     # generic CallbackQueryHandler so command handlers fire first.
     positions.register(app)
+    surveys.register(app)
+    # Модуль опросов ищет профиль через колбэк бота, чтобы не дублировать
+    # обращения к базе и логику определения языка.
+    app.bot_data["get_profile_by_telegram"] = get_profile_by_telegram
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     # Roster: журналируем все изменения участия в RU/EN группах
