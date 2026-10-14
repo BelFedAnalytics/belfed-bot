@@ -629,6 +629,16 @@ TEXTS_RU = {
     "link_taken":      "⚠️ Этот Telegram уже привязан к другому аккаунту BelFed. Один Telegram нельзя связать с двумя аккаунтами. Войдите на сайте под нужным аккаунтом или напишите в поддержку.",
     "cancel_ok":       "Автопродление отключено. Доступ сохранится до {until}.",
     "cancel_none":     "У вас нет активной подписки для отмены.",
+    "cancel_confirm":  ("Отключить автопродление?\n\n"
+                        "Подписка действует до {until}. После этой даты доступ закончится, "
+                        "и продлевать подписку нужно будет вручную."),
+    "cancel_tribute_note": ("Оплату списывает Tribute. Чтобы списаний больше не было, "
+                            "отключите продление и в @tribute: Menu, затем ваша подписка."),
+    "btn_cancel_yes":  "Да, отключить",
+    "btn_cancel_no":   "Нет, оставить",
+    "cancel_kept":     "Автопродление остаётся включённым. Ничего не изменилось.",
+    "cancel_already":  "Автопродление уже отключено. Доступ сохранится до {until}.",
+    "flow_aborted":    "❌ Отменено. Подписка не изменилась.",
     "btn_pay":         "⭐️ Founding Member — 1050 ₽ / мес (−30%)",
     "btn_paid":        "📺 Закрытый канал",
     "btn_status":      "📋 Моя подписка",
@@ -835,6 +845,16 @@ TEXTS_EN = {
     "link_taken":      "⚠️ This Telegram account is already linked to a different BelFed account. One Telegram can't be linked to two accounts. Sign in on the site with the right account, or contact support.",
     "cancel_ok":       "Auto-renew disabled. Access remains until {until}.",
     "cancel_none":     "You don't have an active subscription to cancel.",
+    "cancel_confirm":  ("Turn off auto-renew?\n\n"
+                        "Your subscription is valid until {until}. After that date your access "
+                        "ends and you will need to renew manually."),
+    "cancel_tribute_note": ("Payments are handled by Tribute. To stop future charges, also turn off "
+                            "renewal in @tribute: Menu, then your subscription."),
+    "btn_cancel_yes":  "Yes, turn it off",
+    "btn_cancel_no":   "No, keep it",
+    "cancel_kept":     "Auto-renew stays on. Nothing has changed.",
+    "cancel_already":  "Auto-renew is already off. Access remains until {until}.",
+    "flow_aborted":    "❌ Cancelled. Your subscription has not changed.",
     "btn_pay":         "⭐️ Founding Member — $10.50 / mo (−30%)",
     "btn_paid":        "📺 Private channel",
     "btn_status":      "📋 My subscription",
@@ -1871,13 +1891,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "\n"
             "It will be delivered to our team. We'll reply here in the bot.\n"
             "\n"
-            f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. Send /cancel to abort."
+            f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. To discard it, reply \"cancel\"."
             if lang == "en" else
             "💬 Напишите ваше сообщение для BelFed Support одним ответом.\n"
             "\n"
             "Оно придёт нам, и мы ответим вам здесь же, в боте.\n"
             "\n"
-            f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Отправьте /cancel, чтобы отменить."
+            f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Чтобы не отправлять, ответьте «отмена»."
         )
         placeholder = ("Your message…" if lang == "en"
                        else "Ваше сообщение…")
@@ -2155,13 +2175,13 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "It will be delivered to our team. We'll reply here in the bot.\n"
         "\n"
-        f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. Send /cancel to abort."
+        f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. To discard it, reply \"cancel\"."
         if lang == "en" else
         "💬 Напишите ваше сообщение для BelFed Support одним ответом.\n"
         "\n"
         "Оно придёт нам, и мы ответим вам здесь же, в боте.\n"
         "\n"
-        f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Отправьте /cancel, чтобы отменить."
+        f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Чтобы не отправлять, ответьте «отмена»."
     )
     placeholder = ("Your message…" if lang == "en"
                    else "Ваше сообщение…")
@@ -2198,10 +2218,66 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg, disable_web_page_preview=True)
 
+# Pending text flows that a user may try to leave with /cancel. Old support
+# prompts suggested the /cancel command as a way to abort, but /cancel used to
+# switch auto-renew off immediately (feedback #37/#39). /cancel now
+# closes such a flow first and never touches the subscription in that case.
+PENDING_TEXT_FLOWS = (
+    "awaiting_feedback",
+    "awaiting_chart_request_ticker",
+    "awaiting_email_for_payment",
+)
+
+CB_CANCEL_YES = "ar:off:yes"
+CB_CANCEL_NO  = "ar:off:no"
+
+
+def pop_pending_text_flow(user_data) -> str | None:
+    """Drops every pending text flow; returns the first one found or None."""
+    found = None
+    for key in PENDING_TEXT_FLOWS:
+        if user_data.pop(key, None) is not None and found is None:
+            found = key
+    return found
+
+
+def cancel_confirm_text(lang: str, until: str, provider: str | None) -> str:
+    text = T(lang, "cancel_confirm").format(until=until)
+    if provider == "tribute":
+        text += "\n\n" + T(lang, "cancel_tribute_note")
+    return text
+
+
+def cancel_done_text(lang: str, until: str, provider: str | None) -> str:
+    text = T(lang, "cancel_ok").format(until=until)
+    if provider == "tribute":
+        text += "\n\n" + T(lang, "cancel_tribute_note")
+    return text
+
+
+def cancel_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(T(lang, "btn_cancel_yes"), callback_data=CB_CANCEL_YES),
+        InlineKeyboardButton(T(lang, "btn_cancel_no"),  callback_data=CB_CANCEL_NO),
+    ]])
+
+
+def _sub_until(sub: dict) -> str:
+    exp = parse_ts(sub.get("current_period_end")) or datetime.now(timezone.utc)
+    return exp.strftime("%d.%m.%Y")
+
+
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cancel: closes a pending text flow, otherwise asks to confirm turning
+    auto-renew off. The subscription is changed only after the confirm button."""
     user = update.effective_user
     profile = await get_profile_by_telegram(user.id)
     lang = await get_user_lang(update, profile)
+
+    if pop_pending_text_flow(context.user_data):
+        await update.message.reply_text(T(lang, "flow_aborted"))
+        return
+
     if not profile:
         await update.message.reply_text(T(lang, "need_link")); return
 
@@ -2209,18 +2285,53 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sub or sub.get("status") != "active":
         await update.message.reply_text(T(lang, "cancel_none")); return
 
+    until = _sub_until(sub)
+    if sub.get("cancel_at_period_end"):
+        await update.message.reply_text(T(lang, "cancel_already").format(until=until))
+        return
+
+    await update.message.reply_text(
+        cancel_confirm_text(lang, until, sub.get("provider")),
+        reply_markup=cancel_confirm_keyboard(lang),
+    )
+
+
+async def _handle_cancel_callback(query, update: Update, data: str) -> None:
+    """Confirm / keep buttons under the /cancel question."""
+    profile = await get_profile_by_telegram(query.from_user.id)
+    lang = await get_user_lang(update, profile)
+
+    async def _edit(text: str) -> None:
+        try:
+            await query.edit_message_text(text)
+        except Exception:
+            await query.message.reply_text(text)
+
+    if data == CB_CANCEL_NO:
+        await _edit(T(lang, "cancel_kept")); return
+
+    if not profile:
+        await _edit(T(lang, "need_link")); return
+    # Re-read the row: the question may be old and the state may have changed.
+    sub = await get_subscription(profile["id"])
+    if not sub or sub.get("status") != "active":
+        await _edit(T(lang, "cancel_none")); return
+    until = _sub_until(sub)
+    if sub.get("cancel_at_period_end"):
+        await _edit(T(lang, "cancel_already").format(until=until)); return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
     await sb_patch(
         "/rest/v1/subscriptions",
         params={"user_id": f"eq.{profile['id']}"},
         body={
             "cancel_at_period_end": True,
             "cancel_reason": "user_requested_via_bot",
-            "canceled_at":   datetime.now(timezone.utc).isoformat(),
-            "updated_at":    datetime.now(timezone.utc).isoformat(),
+            "canceled_at":   now_iso,
+            "updated_at":    now_iso,
         },
     )
-    exp = parse_ts(sub.get("current_period_end")) or datetime.now(timezone.utc)
-    await update.message.reply_text(T(lang, "cancel_ok").format(until=exp.strftime("%d.%m.%Y")))
+    await _edit(cancel_done_text(lang, until, sub.get("provider")))
 
 async def cmd_cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выходит из режима сбора email."""
@@ -3416,6 +3527,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data or ""
 
+    if data in (CB_CANCEL_YES, CB_CANCEL_NO):
+        await _handle_cancel_callback(query, update, data)
+        return
+
     # Выбор периода сводки: кнопки под меню /digest и под самой сводкой.
     # Сообщение-вопрос убираем, чтобы в чате оставалась только сводка; ряд
     # кнопок к новой сводке добавляет edge-функция, так что выбор остаётся
@@ -3609,13 +3724,13 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "\n"
             "It will be delivered to our team. We'll reply here in the bot.\n"
             "\n"
-            f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. Send /cancel to abort."
+            f"Limit: {FEEDBACK_DAILY_LIMIT} messages per 24h. To discard it, reply \"cancel\"."
             if lang == "en" else
             "💬 Напишите ваше сообщение для BelFed Support одним ответом.\n"
             "\n"
             "Оно придёт нам, и мы ответим вам здесь же, в боте.\n"
             "\n"
-            f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Отправьте /cancel, чтобы отменить."
+            f"Лимит: {FEEDBACK_DAILY_LIMIT} сообщения в сутки. Чтобы не отправлять, ответьте «отмена»."
         )
         placeholder = ("Your message…" if lang == "en"
                        else "Ваше сообщение…")
@@ -4154,7 +4269,7 @@ async def _set_bot_commands(application: Application):
             BotCommand("status",    "Моя подписка"),
             BotCommand("dashboard", "Открыть дашборд"),
             BotCommand("support",   "Написать в поддержку"),
-            BotCommand("cancel",    "Отменить автопродление"),
+            BotCommand("cancel",    "Отключить автопродление"),
             BotCommand("lang",      "Язык / Language"),
         ]
         en_cmds = [
@@ -4164,7 +4279,7 @@ async def _set_bot_commands(application: Application):
             BotCommand("status",    "My subscription"),
             BotCommand("dashboard", "Open dashboard"),
             BotCommand("support",   "Contact support"),
-            BotCommand("cancel",    "Cancel auto-renew"),
+            BotCommand("cancel",    "Turn off auto-renew"),
             BotCommand("lang",      "Language / Язык"),
         ]
         # Default scope = RU (primary audience); per-language overlays for EN/RU clients.
