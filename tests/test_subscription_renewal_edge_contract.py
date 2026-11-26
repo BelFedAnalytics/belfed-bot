@@ -29,8 +29,13 @@ class TributeAutoRenewContract(unittest.TestCase):
     def test_cancelled_tribute_is_not_blanket_skipped(self):
         self.assertNotIn('s.provider === "tribute")', SOURCE)
 
-    def test_version_is_v13(self):
-        self.assertIn('version: "v13"', SOURCE)
+    def test_version_is_v14(self):
+        self.assertIn('version: "v14"', SOURCE)
+
+    def test_pay_link_messages_carry_period_note(self):
+        # Tribute preselects the 12-month period on its checkout page.
+        self.assertIn('msg.text + "\\n\\n" + periodNote(opts.lang)', SOURCE)
+        self.assertIn("escapeHtml(periodNote(lang))", SOURCE)
 
 
 if __name__ == "__main__":
