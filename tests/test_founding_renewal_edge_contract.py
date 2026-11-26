@@ -45,8 +45,25 @@ class FoundingTributeAutoRenewContract(unittest.TestCase):
             SOURCE,
         )
 
-    def test_version_is_v8(self):
-        self.assertIn('version: "v8"', SOURCE)
+    def test_version_is_v9(self):
+        self.assertIn('version: "v9"', SOURCE)
+
+    def test_autorenew_notice_states_actual_charge_and_period(self):
+        # Tribute sells 1, 3, 6 and 12-month periods: the notice must not
+        # promise a fixed monthly charge to a member who paid for a year.
+        self.assertIn('.from("payments")', SOURCE)
+        self.assertIn("period_months", SOURCE)
+        self.assertNotIn("Founding-цена 1050 ₽/мес зафиксирована", SOURCE)
+        self.assertNotIn("Один платёж 1050 ₽", SOURCE)
+        self.assertNotIn("669⭐", SOURCE)
+
+    def test_manual_notice_carries_period_note(self):
+        self.assertIn("PERIOD_NOTE_RU +", SOURCE)
+        self.assertIn("PERIOD_NOTE_EN +", SOURCE)
+
+    def test_no_long_dashes_in_source(self):
+        self.assertNotIn("\u2014", SOURCE)
+        self.assertNotIn("\u2013", SOURCE)
 
     def test_reminder_view_exposes_cancellation_state(self):
         self.assertIn("s.cancel_at_period_end", MIGRATION)

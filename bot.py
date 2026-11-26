@@ -66,6 +66,79 @@ PRICE_RUB            = os.environ.get("PRICE_MONTHLY_RUB", "1500")
 PRICE_USD            = os.environ.get("PRICE_MONTHLY_USD", "15")
 FM_PRICE_RUB         = os.environ.get("FM_PRICE_MONTHLY_RUB", "1050")   # Founding Member -30%
 FM_PRICE_USD         = os.environ.get("FM_PRICE_MONTHLY_USD", "10.50")  # Founding Member -30%
+
+# Tribute sells 1, 3, 6 and 12-month periods and preselects the longest one on
+# its checkout page, so every message with a pay link carries this reminder.
+PERIOD_NOTE_RU = (
+    "Обратите внимание: период подписки (1, 3, 6 или 12 месяцев) выбирается "
+    "на странице оплаты Tribute. По умолчанию там отмечен вариант на 12 месяцев, "
+    "поэтому перед оплатой выберите нужный вам срок."
+)
+PERIOD_NOTE_EN = (
+    "Please note: you choose the subscription period (1, 3, 6 or 12 months) "
+    "on the Tribute checkout page. The 12-month option is preselected there, "
+    "so pick the period you want before paying."
+)
+
+
+def format_money(amount, currency: str | None) -> str:
+    """Format a payment amount in its own currency: '9 450 ₽', '$94.50', '$15'."""
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        return ""
+    cur = (currency or "RUB").upper()
+    whole = value == int(value)
+    if cur == "RUB":
+        text = f"{int(value):,}" if whole else f"{value:,.2f}"
+        return text.replace(",", "\u00a0") + "\u00a0₽"
+    if cur == "USD":
+        return "$" + (str(int(value)) if whole else f"{value:.2f}")
+    return (str(int(value)) if whole else f"{value:.2f}") + " " + cur
+
+
+def period_label(months, lang: str) -> str:
+    """Human label for a paid period: '1 месяц', '3 месяца', '12 months'."""
+    try:
+        m = int(months or 1)
+    except (TypeError, ValueError):
+        m = 1
+    if m < 1:
+        m = 1
+    if lang == "en":
+        return "1 month" if m == 1 else f"{m} months"
+    if m == 1:
+        return "1 месяц"
+    if 2 <= m <= 4:
+        return f"{m} месяца"
+    return f"{m} месяцев"
+
+
+def subscription_plan_text(payment: dict | None, lang: str, founding: bool) -> str:
+    """Plan line for /status built from the latest succeeded payment.
+
+    The paid period lives on the payment row (payments.period_months), not on
+    the subscription, so a 12-month purchase must not be shown as a monthly
+    price. Without a payment row we fall back to the monthly list price.
+    """
+    name = "Founding Member" if founding else ("BelFed" if lang == "en" else "подписка BelFed")
+    price = format_money(payment.get("amount"), payment.get("currency")) if payment else ""
+    if price:
+        try:
+            months = int(payment.get("period_months") or 1)
+        except (TypeError, ValueError):
+            months = 1
+        if months <= 1:
+            suffix = " / mo" if lang == "en" else " / мес"
+        elif lang == "en":
+            suffix = " for " + period_label(months, lang)
+        else:
+            suffix = " за " + period_label(months, lang)
+        return f"{name} · {price}{suffix}"
+    if founding:
+        return (f"{name} · ${FM_PRICE_USD} / mo" if lang == "en"
+                else f"{name} · {FM_PRICE_RUB} ₽ / мес")
+    return name
 BOT_SHARED_SECRET    = os.environ.get("BOT_SHARED_SECRET", "")
 BOT_CLAIM_TRIAL_URL  = os.environ.get(
     "BOT_CLAIM_TRIAL_URL",
@@ -510,7 +583,20 @@ async def get_profile_by_telegram(telegram_id: int) -> dict | None:
         "/rest/v1/profiles",
         params={"telegram_id": f"eq.{telegram_id}",
                 "select": "id,email,telegram_id,lang,subscription_status,"
-                          "subscription_plan,subscription_expires_at,trial_started_at"},
+                          "subscription_plan,subscription_expires_at,trial_started_at,"
+                          "founding_member"},
+    )
+    return rows[0] if rows else None
+
+async def get_last_payment(user_id: str) -> dict | None:
+    """Latest succeeded payment: source of the paid period and amount."""
+    rows = await sb_get(
+        "/rest/v1/payments",
+        params={"user_id": f"eq.{user_id}",
+                "status": "eq.succeeded",
+                "select": "amount,currency,period_months,created_at",
+                "order": "created_at.desc",
+                "limit": "1"},
     )
     return rows[0] if rows else None
 
@@ -615,11 +701,13 @@ TEXTS_RU = {
     ),
     "menu":            "// BELFED ANALYTICS\n\nРады видеть вас снова, {name}.",
     "trial_active":    ("🎁 Пробный доступ\nДействует до: {until}\nОсталось: {days} дн.\n\n"
-                        f"Оформить подписку {FM_PRICE_RUB} ₽ / мес (−30%): " + TRIBUTE_RU_URL),
+                        f"Оформить подписку {FM_PRICE_RUB} ₽ / мес (−30%): " + TRIBUTE_RU_URL
+                        + "\n\n" + PERIOD_NOTE_RU),
     "status_active":   ("✅ Подписка активна\n"
-                        f"План: Founding Member ({FM_PRICE_RUB} ₽ / мес, −30%)\n"
+                        "План: {plan}\n"
                         "Действует до: {until}\n{autorenew}"),
-    "status_none":     "❌ Подписки нет.\n\n" + f"Оформить ({FM_PRICE_RUB} ₽ / мес, −30%): " + TRIBUTE_RU_URL,
+    "status_none":     ("❌ Подписки нет.\n\n" + f"Оформить ({FM_PRICE_RUB} ₽ / мес, −30%): " + TRIBUTE_RU_URL
+                        + "\n\n" + PERIOD_NOTE_RU),
     "autorenew_on":    "Автопродление: включено",
     "autorenew_off":   "Автопродление: отключено · доступ закончится в указанную дату",
     "need_link":       "Сначала привяжите аккаунт сайта: " + WEB_URL_RU + "/members.html",
@@ -693,6 +781,7 @@ TEXTS_RU = {
         "⚠️ Триал на этот Telegram-аккаунт уже был активирован ранее.\n\n"
         f"Чтобы продолжить, оформите подписку {PRICE_RUB} ₽ / мес: "
         + TRIBUTE_RU_URL
+        + "\n\n" + PERIOD_NOTE_RU
     ),
     "trial_claim_error": (
         "⚠️ Не удалось открыть триал. Попробуйте ещё раз через минуту "
@@ -821,11 +910,13 @@ TEXTS_EN = {
     ),
     "menu":            "// BELFED ANALYTICS\n\nGood to see you again, {name}.",
     "trial_active":    ("🎁 Trial access\nValid until: {until}\nDays left: {days}\n\n"
-                        f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL),
+                        f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL
+                        + "\n\n" + PERIOD_NOTE_EN),
     "status_active":   ("✅ Subscription active\n"
-                        f"Plan: Founding Member (${FM_PRICE_USD} / mo, −30%)\n"
+                        "Plan: {plan}\n"
                         "Valid until: {until}\n{autorenew}"),
-    "status_none":     "❌ No active subscription.\n\n" + f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL,
+    "status_none":     ("❌ No active subscription.\n\n" + f"Subscribe (${FM_PRICE_USD} / mo, −30%): " + TRIBUTE_EN_URL
+                        + "\n\n" + PERIOD_NOTE_EN),
     "autorenew_on":    "Auto-renew: on",
     "autorenew_off":   "Auto-renew: off · access ends on the date above",
     "need_link":       "Please link your account first: " + WEB_URL_EN + "/members.html",
@@ -913,6 +1004,7 @@ TEXTS_EN = {
         "⚠️ The trial for this Telegram account has already been used.\n\n"
         f"To continue, subscribe (${PRICE_USD} / mo): "
         + TRIBUTE_EN_URL
+        + "\n\n" + PERIOD_NOTE_EN
     ),
     "trial_claim_error": (
         "⚠️ Couldn't open the trial. Please try again in a minute "
@@ -1438,10 +1530,10 @@ async def start_payment_with_email(query_or_message, context: ContextTypes.DEFAU
     _trib = TRIBUTE_EN_URL if lang == "en" else TRIBUTE_RU_URL
     _kb = InlineKeyboardMarkup([[InlineKeyboardButton(T(lang, "btn_pay"), url=_trib)]])
     _msg = ("⭐️ Оформите подписку Founding Member через Tribute.\n"
-            "14 дней бесплатно · отмена в любой момент."
+            "14 дней бесплатно · отмена в любой момент.\n\n" + PERIOD_NOTE_RU
             if lang != "en" else
             "⭐️ Subscribe as a Founding Member via Tribute.\n"
-            "14-day free trial · cancel anytime.")
+            "14-day free trial · cancel anytime.\n\n" + PERIOD_NOTE_EN)
     await query_or_message.reply_text(_msg, reply_markup=_kb, disable_web_page_preview=True)
     return
     """Универсальный вход в оплату (YooKassa или Stars).
@@ -2189,7 +2281,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         autorenew = (T(lang, "autorenew_on")
                      if is_autorenew_enabled(sub)
                      else T(lang, "autorenew_off"))
-        msg = T(lang, "status_active").format(until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
+        plan_text = subscription_plan_text(
+            await get_last_payment(profile["id"]), lang, bool(profile.get("founding_member")))
+        msg = T(lang, "status_active").format(
+            plan=plan_text, until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
     elif plan == "trial" and exp and exp > now:
         days_left = max(0, (exp - now).days)
         msg = T(lang, "trial_active").format(until=exp.strftime("%d.%m.%Y"), days=days_left)
@@ -3575,7 +3670,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             autorenew = (T(lang, "autorenew_on")
                          if is_autorenew_enabled(sub)
                          else T(lang, "autorenew_off"))
-            msg = T(lang, "status_active").format(until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
+            plan_text = subscription_plan_text(
+                await get_last_payment(profile["id"]), lang, bool(profile.get("founding_member")))
+            msg = T(lang, "status_active").format(
+                plan=plan_text, until=exp.strftime("%d.%m.%Y"), autorenew=autorenew)
         elif plan == "trial" and exp and exp > now:
             days_left = max(0, (exp - now).days)
             msg = T(lang, "trial_active").format(until=exp.strftime("%d.%m.%Y"), days=days_left)

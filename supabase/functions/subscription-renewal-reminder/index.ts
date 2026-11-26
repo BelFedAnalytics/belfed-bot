@@ -1,9 +1,14 @@
 // deno-lint-ignore-file no-explicit-any
 //
-// subscription-renewal-reminder v13 (2026-08-25)
+// subscription-renewal-reminder v14 (2026-11-26)
 // ==============================================
 // Telegram DM + email reminders about an upcoming / just-passed PAID
 // subscription expiry, nudging the member to renew via Tribute.
+//
+// v14 changes:
+//   - Tribute now sells 1, 3, 6 and 12-month periods and preselects the
+//     longest one on its checkout page. Every Telegram DM and email with a pay
+//     link carries a note asking the member to pick the period before paying.
 //
 // v13 changes:
 //   - Active Tribute subscriptions with cancel_at_period_end=false are treated
@@ -82,9 +87,27 @@ type ReminderKind = "pre_3d" | "pre_1d" | "on_expiry" | "post_3d";
 
 const EMAIL_KINDS = new Set<ReminderKind>(["pre_3d", "on_expiry", "post_3d"]);
 
+// ─── Period note (Tribute checkout preselects 12 months) ───────────────────
+
+const PERIOD_NOTE_RU =
+  "Обратите внимание: период подписки (1, 3, 6 или 12 месяцев) выбирается на странице оплаты Tribute. " +
+  "По умолчанию там отмечен вариант на 12 месяцев, поэтому перед оплатой выберите нужный вам срок.";
+const PERIOD_NOTE_EN =
+  "Please note: you choose the subscription period (1, 3, 6 or 12 months) on the Tribute checkout page. " +
+  "The 12-month option is preselected there, so pick the period you want before paying.";
+
+function periodNote(lang: string): string {
+  return lang === "ru" ? PERIOD_NOTE_RU : PERIOD_NOTE_EN;
+}
+
 // ─── Telegram copy ─────────────────────────────────────────────────────────
 
 function buildMessage(opts: { lang: string; founding: boolean; kind: ReminderKind; expiresAt: Date; }) {
+  const msg = buildMessageCore(opts);
+  return { ...msg, text: msg.text + "\n\n" + periodNote(opts.lang) };
+}
+
+function buildMessageCore(opts: { lang: string; founding: boolean; kind: ReminderKind; expiresAt: Date; }) {
   const { lang, founding, kind, expiresAt } = opts;
   const dateStr = fmtDate(expiresAt, lang);
   const amountRu = founding ? "1050₽" : "1500₽";
@@ -339,6 +362,7 @@ function buildEmail(opts: {
     <h1 style="margin:0 0 20px 0;font-size:24px;font-weight:700;letter-spacing:-0.3px">${escapeHtml(headline)}</h1>
     ${bodyHtml}
     <div style="margin-top:26px">${ctaButton(button, tributeUrl)}</div>
+    <p style="margin:22px 0 0 0;padding:10px 14px;border-left:2px solid #1a6b3a;background:#eceae3;font-size:13px;line-height:1.6;color:#333">${escapeHtml(periodNote(lang))}</p>
   `;
 
   return {
@@ -356,10 +380,10 @@ async function sendViaBrevo(opts: {
   unsubscribeToken: string | null;
 }): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   if (!BREVO_API_KEY) return { ok: false, error: "BREVO_API_KEY missing" };
-  const site = opts.lang === "en" ? SITE_EN : SITE_RU;
   const headers: Record<string, string> = {};
   if (opts.unsubscribeToken) {
-    const unsubUrl = `${site}/unsubscribe.html?token=${encodeURIComponent(opts.unsubscribeToken)}`;
+    // RFC 8058: One-Click требует endpoint с POST, статическая страница его не обработает.
+    const unsubUrl = `${SUPABASE_URL}/functions/v1/email-unsubscribe?token=${encodeURIComponent(opts.unsubscribeToken)}`;
     headers["List-Unsubscribe"] = `<${unsubUrl}>`;
     headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
   }
@@ -407,7 +431,7 @@ async function resolveSubscriber(email: string, lang: "ru" | "en", profileId: st
 
   const { data: created } = await sb.from("email_subscribers")
     .insert({
-      email, language: lang, segment: "premium", source: "renewal_reminder",
+      email, language: lang, segment: "premium", source: "auto_premium", notes: "renewal_reminder",
       profile_id: profileId, confirmed_at: new Date().toISOString(),
     })
     .select("id, unsubscribe_token, unsubscribed_at, notes")
@@ -445,12 +469,12 @@ Deno.serve(async (req) => {
     const expiresAt = new Date(Date.now() + (kind === "post_3d" ? -3 : kind === "on_expiry" ? 0 : 3) * 24 * 3600 * 1000);
     const mail = buildEmail({ lang, founding, kind, expiresAt, unsubscribeToken: "preview-token" });
     if (dryRun) {
-      return new Response(JSON.stringify({ version: "v12", mode: "test_preview", kind, lang, founding,
+      return new Response(JSON.stringify({ version: "v14", mode: "test_preview", kind, lang, founding,
         subject: mail.subject, preheader: mail.preheader, html: mail.html }, null, 2),
         { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const res = await sendViaBrevo({ toEmail: testEmail, subject: mail.subject, html: mail.html, lang, unsubscribeToken: null });
-    return new Response(JSON.stringify({ version: "v12", mode: "test_send", kind, lang, founding, to: testEmail, result: res }, null, 2),
+    return new Response(JSON.stringify({ version: "v14", mode: "test_send", kind, lang, founding, to: testEmail, result: res }, null, 2),
       { status: res.ok ? 200 : 500, headers: { "Content-Type": "application/json" } });
   }
 
@@ -458,7 +482,7 @@ Deno.serve(async (req) => {
 
   // v10: symmetric window [-4d, +4d] to cover pre_3d ... post_3d.
   let query = sb.from("profiles")
-    .select("id, telegram_id, telegram_username, email, lang, founding_member, subscription_status, subscription_plan, is_test_profile, subscription_expires_at, subscriptions:subscriptions!subscriptions_user_id_fkey(provider, status, payment_method_id, provider_subscription_id, cancel_at_period_end)")
+    .select("id, telegram_id, telegram_username, email, email_opt_out, lang, founding_member, subscription_status, subscription_plan, is_test_profile, subscription_expires_at, subscriptions:subscriptions!subscriptions_user_id_fkey(provider, status, payment_method_id, provider_subscription_id, cancel_at_period_end)")
     .not("telegram_id", "is", null)
     .not("subscription_expires_at", "is", null)
     .gte("subscription_expires_at", new Date(now.getTime() - 4 * 24 * 3600 * 1000).toISOString())
@@ -544,6 +568,10 @@ Deno.serve(async (req) => {
       emailReason = "no_email_on_profile";
     } else if (existing?.email_message_id) {
       emailReason = "email_already_sent";
+    } else if (!/@/.test(rawEmail) || /@(belfed\.local|localhost)$/.test(rawEmail)) {
+      emailReason = "undeliverable_placeholder_address";
+    } else if ((row as any).email_opt_out === true) {
+      emailReason = "profile_email_opt_out";
     } else {
       subscriber = await resolveSubscriber(rawEmail, lang, row.id);
       if (subscriber?.unsubscribed_at && (subscriber.notes ?? "") !== "auto_expired") {
@@ -639,7 +667,7 @@ Deno.serve(async (req) => {
   }
 
   return new Response(JSON.stringify({
-    version: "v13", sent: sentCount, emails_sent: emailSentCount, skipped: skippedCount,
+    version: "v14", sent: sentCount, emails_sent: emailSentCount, skipped: skippedCount,
     errors: errors.length, error_details: errors, dry_run: dryRun,
     candidates_evaluated: (candidates ?? []).length, details: results,
   }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
